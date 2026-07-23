@@ -129,6 +129,10 @@ jobs:
             ] == [["linux", "amd64"]]
           ' "$manifest" >/dev/null
 
+      - name: Release build cache before the immutable pull
+        shell: bash
+        run: docker buildx prune --all --force
+
       - name: Run the hardened self-test by immutable digest
         shell: bash
         run: |
