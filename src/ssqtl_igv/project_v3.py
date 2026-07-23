@@ -149,6 +149,13 @@ def _project_directory_binding(
     declared_path: str,
     label: str,
 ) -> dict[str, Any]:
+    """Inventory project-directory inputs without rereading large data files.
+
+    Selected RDS/PDF inputs are content-hashed once during canonical
+    normalization.  This pre-normalization binding only needs the same stable
+    path/size/mtime metadata used by standard Nextflow file caching.
+    """
+
     source = Path(source_value).resolve(strict=True)
     try:
         source.relative_to(root)
@@ -185,11 +192,12 @@ def _project_directory_binding(
             if resolved_child.is_dir():
                 visit(child, logical_child, next_ancestors)
             elif resolved_child.is_file():
+                stat = resolved_child.stat()
                 files.append(
                     {
                         "path": logical_child.as_posix(),
-                        "size": resolved_child.stat().st_size,
-                        "sha256": sha256_file(resolved_child),
+                        "size": stat.st_size,
+                        "mtime_ns": stat.st_mtime_ns,
                     }
                 )
             else:
@@ -222,11 +230,12 @@ def _lookup_regular_file_binding(
         raise ValueError(f"BAM lookup {role} symlink escapes the project directory") from exc
     if not resolved.is_file():
         raise ValueError(f"BAM lookup {role} must resolve to a regular file: {relative}")
+    stat = resolved.stat()
     return {
         "role": role,
         "path": relative,
-        "size": resolved.stat().st_size,
-        "sha256": sha256_file(resolved),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
     }
 
 
@@ -237,8 +246,9 @@ def _ssqtl_bam_lookup_resource_binding(
 
     The R adapter searches one referenced directory per sample, first by its
     configured suffixes and then by a non-recursive ``sample_id.*.bam`` match.
-    Binding that eligible union catches missing/ambiguous/selected-file drift
-    without invalidating resume for unrelated BAMs in a shared directory.
+    Binding the selected files' path/size/mtime metadata catches
+    missing/ambiguous/selected-file drift without rereading large tracks or
+    invalidating resume for unrelated BAMs in a shared directory.
     """
 
     # Import lazily to keep project schema loading independent of the heavier
@@ -273,24 +283,38 @@ def _ssqtl_bam_lookup_resource_binding(
                 f"ssQTL resolver: {lookup_path.relative_to(root).as_posix()}"
             )
 
+        direct_matches: list[Path] = []
         for suffix in options["bam_suffixes"]:
             candidate = lookup_path / f"{sample_id}{suffix}"
             if candidate.exists() or candidate.is_symlink():
-                eligible_bams[str(candidate)] = candidate
+                direct_matches.append(candidate)
+        if direct_matches:
+            # Match prepare_cases.R: configured suffix order is authoritative.
+            selected = direct_matches[0]
+            eligible_bams[str(selected)] = selected
+            continue
 
         fallback = re.compile(re.escape(sample_id) + r".*[.]bam$", re.IGNORECASE)
-        for candidate in sorted(lookup_path.iterdir(), key=lambda item: item.name):
-            if fallback.search(candidate.name):
-                eligible_bams[str(candidate)] = candidate
+        fallback_matches = [
+            candidate
+            for candidate in sorted(lookup_path.iterdir(), key=lambda item: item.name)
+            if fallback.search(candidate.name)
+        ]
+        if len(fallback_matches) == 1:
+            selected = fallback_matches[0]
+            eligible_bams[str(selected)] = selected
 
     resources: dict[tuple[str, str], dict[str, Any]] = {}
     for bam in sorted(eligible_bams.values(), key=str):
         bam_record = _lookup_regular_file_binding(root, bam, role="BAM")
         resources[("BAM", bam_record["path"])] = bam_record
         bai_candidates = (Path(f"{bam}.bai"), bam.with_suffix(".bai"))
-        for bai in bai_candidates:
-            if not bai.exists() and not bai.is_symlink():
-                continue
+        existing_indexes = [
+            bai for bai in bai_candidates if bai.exists() or bai.is_symlink()
+        ]
+        if existing_indexes:
+            # Match prepare_cases.R: <bam>.bai precedes replacement .bai.
+            bai = existing_indexes[0]
             bai_record = _lookup_regular_file_binding(root, bai, role="BAI")
             resources[("BAI", bai_record["path"])] = bai_record
 
