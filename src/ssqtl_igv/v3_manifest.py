@@ -534,14 +534,14 @@ def normalize_generic_manifest(
                     bam_declared,
                     role="bam",
                     discriminator=track_key,
-                    hash_content=True,
+                    hash_content=False,
                 ),
                 "bai": _file_resource(
                     root,
                     bai_value,
                     role="bai",
                     discriminator=track_key,
-                    hash_content=True,
+                    hash_content=False,
                 ),
             }
         )
@@ -667,6 +667,7 @@ def _rehash_v2_resource(
     legacy_identity: Mapping[str, Any],
     *,
     label: str,
+    sha256_cache: dict[Path, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     source = Path(source_value).expanduser().resolve(strict=True)
     if not source.is_file():
@@ -676,10 +677,16 @@ def _rehash_v2_resource(
         raise ValueError(f"{label} size differs from the frozen v2 task")
     if "mtime_ns" in legacy_identity and int(legacy_identity["mtime_ns"]) != stat.st_mtime_ns:
         raise ValueError(f"{label} mtime differs from the frozen v2 task")
-    observed_sha = sha256_file(source)
     expected_sha = str(legacy_identity.get("sha256") or "").lower()
-    if expected_sha and expected_sha != observed_sha:
-        raise ValueError(f"{label} content differs from the frozen v2 task")
+    observed_sha: str | None = None
+    if expected_sha:
+        cache = sha256_cache if sha256_cache is not None else {}
+        observed_sha = cache.get(source)
+        if observed_sha is None:
+            observed_sha = sha256_file(source)
+            cache[source] = observed_sha
+        if expected_sha != observed_sha:
+            raise ValueError(f"{label} content differs from the frozen v2 task")
     return str(source), file_identity(source, sha256=observed_sha)
 
 
@@ -690,6 +697,7 @@ def _portable_ssqtl_resource(
     *,
     role: str,
     discriminator: str,
+    sha256_cache: dict[Path, str] | None = None,
 ) -> dict[str, Any]:
     """Rebind a selected ssQTL input to its portable /input-relative identity."""
 
@@ -697,6 +705,7 @@ def _portable_ssqtl_resource(
         source_value,
         legacy_identity,
         label=role,
+        sha256_cache=sha256_cache,
     )
     resolved = Path(source)
     try:
@@ -721,6 +730,7 @@ def native_ssqtl_task_from_prepared(
     reference: Mapping[str, Any],
     preparation_evidence: Mapping[str, Any],
     scientific_interpretation: str = "PENDING",
+    resource_sha256_cache: dict[Path, str] | None = None,
 ) -> dict[str, Any]:
     """Create one native v3 ssQTL task from private preparation-library output.
 
@@ -751,6 +761,7 @@ def native_ssqtl_task_from_prepared(
             track["bam_identity"],
             role="ssqtl_bam",
             discriminator=f"{prepared['task_id']}:{order}",
+            sha256_cache=resource_sha256_cache,
         )
         bai = _portable_ssqtl_resource(
             root,
@@ -758,6 +769,7 @@ def native_ssqtl_task_from_prepared(
             track["bai_identity"],
             role="ssqtl_bai",
             discriminator=f"{prepared['task_id']}:{order}",
+            sha256_cache=resource_sha256_cache,
         )
         tracks.append(
             {
@@ -791,6 +803,7 @@ def native_ssqtl_task_from_prepared(
             prepared_plot["pdf_identity"],
             role="ssqtl_violin",
             discriminator=str(prepared["task_id"]),
+            sha256_cache=resource_sha256_cache,
         )
         auxiliary = {
             "state": "PRESENT",
@@ -816,13 +829,22 @@ def native_ssqtl_task_from_prepared(
     native_reference = copy.deepcopy(dict(reference))
     prepared_resources = prepared["reference"]["resources"]
     for role, resource in native_reference["resources"].items():
-        prepared_source = Path(prepared_resources[role]["source_path"]).resolve(strict=True)
+        prepared_resource = prepared_resources[role]
+        prepared_source = Path(prepared_resource["source_path"]).resolve(strict=True)
         native_source = Path(resource["source_path"]).resolve(strict=True)
         if prepared_source != native_source:
             raise ValueError(f"ssQTL prepared reference differs from reference.yaml: {role}")
-        expected_sha = str(resource["identity"].get("sha256") or "")
-        if not expected_sha or sha256_file(prepared_source) != expected_sha:
+        prepared_identity = prepared_resource.get("identity")
+        native_identity = resource["identity"]
+        if not isinstance(prepared_identity, Mapping) or any(
+            int(prepared_identity.get(key, -1)) != int(native_identity[key])
+            for key in ("size", "mtime_ns")
+        ):
             raise ValueError(f"ssQTL prepared reference identity differs: {role}")
+        prepared_sha = str(prepared_identity.get("sha256") or "")
+        native_sha = str(native_identity.get("sha256") or "")
+        if not native_sha or (prepared_sha and prepared_sha != native_sha):
+            raise ValueError(f"ssQTL prepared reference checksum differs: {role}")
 
     ag = prepared["ag"]
     task: dict[str, Any] = {

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -17,6 +18,7 @@ from ssqtl_igv.sharding_v3 import create_bounded_shards
 from ssqtl_igv.orchestrator_v3 import (
     _admit_session_case_outputs,
     _recover_prior_attempt_accounting,
+    _verify_canonical_input_identities,
     execute_portable_run,
     prepare_portable_run,
 )
@@ -197,22 +199,74 @@ def test_staged_identity_detects_same_size_mtime_replacement(tmp_path: Path) -> 
     assert not _identity_matches(path, identity)
 
 
-def test_normalized_bam_identity_detects_same_size_same_mtime_replacement(
+def test_normalized_bam_uses_metadata_identity_and_nextflow_path_cache(
     tmp_path: Path,
 ) -> None:
     normalized = _normalized(tmp_path)
     task = next(read_jsonl(normalized["tasks"]))
     bam = task["core"]["tracks"][0]["bam"]
-    source = Path(bam["source_path"])
-    original_mtime = source.stat().st_mtime_ns
-    original_size = source.stat().st_size
-    replacement = b"x" * original_size
-    assert replacement != source.read_bytes()
-    source.write_bytes(replacement)
-    os.utime(source, ns=(original_mtime, original_mtime))
+    assert set(bam["identity"]) == {"size", "mtime_ns"}
 
-    assert bam["identity"]["sha256"]
-    assert not _identity_matches(source, bam["identity"])
+    process = (PROJECT_ROOT / "modules/local/run_portable_case.nf").read_text(
+        encoding="utf-8"
+    )
+    assert "cache true" in process
+    assert "path(staged_inputs" in process
+
+
+def test_prelaunch_revalidation_hashes_shared_fixed_resources_once(
+    tmp_path: Path,
+) -> None:
+    normalized = _normalized(tmp_path, cases=2)
+    tasks = list(read_jsonl(normalized["tasks"]))
+
+    with patch(
+        "ssqtl_igv.orchestrator_v3.sha256_file", wraps=sha256_file
+    ) as hash_file:
+        result = _verify_canonical_input_identities(tasks)
+
+    assert result["status"] == "PASS"
+    assert result["unique_resource_count"] == 9
+    assert hash_file.call_count == 5
+
+
+def test_prelaunch_revalidation_requires_reference_sha256(tmp_path: Path) -> None:
+    normalized = _normalized(tmp_path)
+    task = next(read_jsonl(normalized["tasks"]))
+    task["core"]["reference"]["resources"]["fasta"]["identity"].pop("sha256")
+
+    with pytest.raises(ValueError, match="reference:fasta resource lacks content SHA-256"):
+        _verify_canonical_input_identities([task])
+
+
+def test_prelaunch_revalidation_requires_auxiliary_sha256(tmp_path: Path) -> None:
+    normalized = _normalized(tmp_path)
+    task = next(read_jsonl(normalized["tasks"]))
+    source = tmp_path / "panel.png"
+    source.write_bytes(b"synthetic-panel")
+    task["core"]["auxiliary"] = {
+        "state": "PRESENT",
+        "source_path": str(source.resolve()),
+        "identity": {
+            "size": source.stat().st_size,
+            "mtime_ns": source.stat().st_mtime_ns,
+        },
+    }
+
+    with pytest.raises(ValueError, match="auxiliary resource lacks content SHA-256"):
+        _verify_canonical_input_identities([task])
+
+
+def test_prelaunch_revalidation_rejects_same_path_with_conflicting_identity(
+    tmp_path: Path,
+) -> None:
+    normalized = _normalized(tmp_path)
+    task = next(read_jsonl(normalized["tasks"]))
+    track = task["core"]["tracks"][0]
+    track["bai"]["source_path"] = track["bam"]["source_path"]
+
+    with pytest.raises(ValueError, match="canonical source has conflicting identities"):
+        _verify_canonical_input_identities([task])
 
 
 def test_samtools_validation_uses_the_explicit_nondefault_bai(

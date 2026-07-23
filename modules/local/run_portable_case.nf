@@ -2,7 +2,7 @@ process RUN_PORTABLE_CASE {
     tag "${task_id}"
     label 'portable_runtime'
     label 'portable_render'
-    cache 'deep'
+    cache true
 
     publishDir "${params.session_output}/case_outputs", mode: 'copy', overwrite: false
 

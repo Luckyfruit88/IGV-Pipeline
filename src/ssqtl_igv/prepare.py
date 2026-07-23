@@ -42,6 +42,16 @@ _DEFAULT_BAM_SUFFIXES = [
 from .violin import ViolinMatchError, pdf_pages, unique_pages_for_pairs
 
 
+def _read_fai_index(fai: Path) -> dict[str, tuple[int, int, int, int]]:
+    index: dict[str, tuple[int, int, int, int]] = {}
+    with fai.open(encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) >= 5:
+                index[fields[0]] = tuple(int(value) for value in fields[1:5])
+    return index
+
+
 def _reference_context(
     fasta: Path,
     fai: Path,
@@ -50,16 +60,14 @@ def _reference_context(
     start: int,
     end: int,
     strand: str,
+    fai_index: dict[str, tuple[int, int, int, int]] | Exception | None = None,
 ) -> dict[str, Any]:
     """Read the two AG-site bases by indexed FASTA byte offsets."""
 
     try:
-        index: dict[str, tuple[int, int, int, int]] = {}
-        with fai.open(encoding="utf-8") as handle:
-            for line in handle:
-                fields = line.rstrip("\n").split("\t")
-                if len(fields) >= 5:
-                    index[fields[0]] = tuple(int(value) for value in fields[1:5])
+        if isinstance(fai_index, Exception):
+            raise ValueError(f"FAI index unavailable: {fai_index}")
+        index = fai_index if fai_index is not None else _read_fai_index(fai)
         length, sequence_offset, line_bases, line_width = index[chrom]
         left, right = sorted((int(start), int(end)))
         if left < 1 or right > length:
@@ -315,6 +323,13 @@ def prepare_run(
         )
     page_index_cache: dict[Path, dict[tuple[str, str], int | ViolinMatchError] | Exception] = {}
     pdf_sha_cache: dict[Path, str] = {}
+    reference_fai = config.path_value("genome.fai")
+    try:
+        reference_fai_index: dict[str, tuple[int, int, int, int]] | Exception = _read_fai_index(
+            reference_fai
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        reference_fai_index = exc
     records: list[dict[str, Any]] = []
     shard_counts: Counter[str] = Counter()
     failed = 0
@@ -519,6 +534,7 @@ def prepare_run(
             start=ag.start,
             end=ag.end,
             strand=strand,
+            fai_index=reference_fai_index,
         )
         record["input_fingerprint"] = sha256_json({key: value for key, value in record.items() if key != "input_fingerprint"})
         records.append(record)

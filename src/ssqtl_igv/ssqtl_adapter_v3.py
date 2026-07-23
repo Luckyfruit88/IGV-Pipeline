@@ -332,6 +332,7 @@ def _rds_resource(
     input_root: Path,
     rds_declared: str,
     template: str,
+    sha256_cache: dict[Path, str],
 ) -> dict[str, Any]:
     strand = str(task["strand"])
     name = (
@@ -341,10 +342,14 @@ def _rds_resource(
     )
     declared = PurePosixPath(rds_declared, name).as_posix()
     relative, source = _resolve_relative_file(input_root, declared, label="ssQTL RDS")
+    digest = sha256_cache.get(source)
+    if digest is None:
+        digest = sha256_file(source)
+        sha256_cache[source] = digest
     return {
         "declared_path": relative,
         "source_path": str(source),
-        "identity": file_identity(source, sha256=sha256_file(source)),
+        "identity": file_identity(source, sha256=digest),
     }
 
 
@@ -524,12 +529,14 @@ def normalize_ssqtl_inputs(
             }
             tasks: list[dict[str, Any]] = []
             rds_inventory: dict[str, dict[str, Any]] = {}
+            resource_sha256_cache: dict[Path, str] = {}
             for prepared in prepared_tasks:
                 rds = _rds_resource(
                     prepared,
                     input_root=root,
                     rds_declared=rds_declared,
                     template=options["rds_filename_template"],
+                    sha256_cache=resource_sha256_cache,
                 )
                 rds_inventory[rds["declared_path"]] = rds
                 evidence = {**base_evidence, "rds": rds}
@@ -539,6 +546,7 @@ def normalize_ssqtl_inputs(
                         input_root=root,
                         reference=reference,
                         preparation_evidence=evidence,
+                        resource_sha256_cache=resource_sha256_cache,
                     )
                 )
             tasks = validate_unique_task_set(tasks)

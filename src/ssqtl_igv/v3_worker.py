@@ -92,14 +92,16 @@ def _resources(task: dict[str, Any]) -> list[dict[str, Any]]:
     return resources
 
 
-def _identity_matches(path: Path, identity: dict[str, Any]) -> bool:
+def _identity_matches(
+    path: Path, identity: dict[str, Any], *, verify_content: bool = True
+) -> bool:
     stat = path.stat()
     if "size" in identity and int(identity["size"]) != stat.st_size:
         return False
     if "mtime_ns" in identity and int(identity["mtime_ns"]) != stat.st_mtime_ns:
         return False
     expected = str(identity.get("sha256") or "").strip().lower()
-    return not expected or sha256_file(path) == expected
+    return not expected or not verify_content or sha256_file(path) == expected
 
 
 def _validate_staged_inputs(
@@ -119,7 +121,7 @@ def _validate_staged_inputs(
         path = staged_path.resolve(strict=True)
         if not path.is_file():
             raise RuntimeError(f"staged input is not a regular file: {name}:{path}")
-        if not _identity_matches(path, resource["identity"]):
+        if not _identity_matches(path, resource["identity"], verify_content=False):
             raise RuntimeError(f"staged input identity changed after normalization: {name}")
         alias = alias_root / name
         alias.symlink_to(path)

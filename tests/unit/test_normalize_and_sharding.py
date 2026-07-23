@@ -15,6 +15,7 @@ from ssqtl_igv.composition import compose_case
 from ssqtl_igv.contracts import validate_case_result_document, validate_task_document
 from ssqtl_igv.desktop import DesktopFailure, DesktopResult
 from ssqtl_igv.normalize import normalize_manifest
+from ssqtl_igv.prepare import _read_fai_index, _reference_context
 from ssqtl_igv.publication import publish_reviewed, verify_checksum_tree
 from ssqtl_igv.qc_case import qc_case
 from ssqtl_igv.r_prepare import run_r_prepare
@@ -39,6 +40,28 @@ R_PREPARE_WRAPPER = PROJECT_ROOT / "bin" / "prepare_cases.R"
 R_PREPARE_IMPLEMENTATION = (
     PROJECT_ROOT / "src" / "ssqtl_igv" / "resources" / "prepare_cases.R"
 )
+
+
+def test_reference_context_reuses_preloaded_fai_index(tmp_path: Path) -> None:
+    fasta = tmp_path / "genome.fa"
+    fai = tmp_path / "genome.fa.fai"
+    fasta.write_text(">chrA\nAAGTC\n", encoding="utf-8")
+    fai.write_text("chrA\t5\t6\t5\t6\n", encoding="utf-8")
+
+    index = _read_fai_index(fai)
+    fai.unlink()
+    context = _reference_context(
+        fasta,
+        fai,
+        chrom="chrA",
+        start=2,
+        end=3,
+        strand="+",
+        fai_index=index,
+    )
+
+    assert context["available"] is True
+    assert context["transcript_sequence"] == "AG"
 
 
 def _normalization_fixture(root: Path) -> tuple[Path, Path, Path]:

@@ -63,7 +63,12 @@ def _input_root(root: Path) -> Path:
     return root
 
 
-def _prepared_task(input_root: Path, reference_path: Path) -> dict[str, object]:
+def _prepared_task(
+    input_root: Path,
+    reference_path: Path,
+    *,
+    include_track_sha256: bool = True,
+) -> dict[str, object]:
     reference, _source = _load_reference(reference_path)
     bam = input_root / "tracks" / "sample-1.bam"
     bai = input_root / "tracks" / "sample-1.bam.bai"
@@ -111,8 +116,13 @@ def _prepared_task(input_root: Path, reference_path: Path) -> dict[str, object]:
             "sample_id": "sample-1", "genotype": "0/0", "dosage": 0,
             "ratio": 0.25, "selection_label": "all", "bam": str(bam), "bai": str(bai),
             "stage_bam": "unused.bam", "stage_bai": "unused.bam.bai",
-            "bam_identity": file_identity(bam, sha256=sha256_file(bam)),
-            "bai_identity": file_identity(bai, sha256=sha256_file(bai)), "bai_fresh": True,
+            "bam_identity": file_identity(
+                bam, sha256=sha256_file(bam) if include_track_sha256 else None
+            ),
+            "bai_identity": file_identity(
+                bai, sha256=sha256_file(bai) if include_track_sha256 else None
+            ),
+            "bai_fresh": True,
         }],
         "plot": {
             "state": "PRESENT", "pdf": str(pdf), "stage_pdf": "unused.pdf", "page": 1,
@@ -144,11 +154,17 @@ def _prepared_task(input_root: Path, reference_path: Path) -> dict[str, object]:
     return task
 
 
-def _fake_science_normalizer(reference_path: Path):
+def _fake_science_normalizer(
+    reference_path: Path, *, include_track_sha256: bool = True
+):
     def run(_params: Path, output: Path, **kwargs):
         destination = Path(output)
         destination.mkdir()
-        task = _prepared_task(Path(kwargs["associations"]).parent, reference_path)
+        task = _prepared_task(
+            Path(kwargs["associations"]).parent,
+            reference_path,
+            include_track_sha256=include_track_sha256,
+        )
         task["run_id"] = kwargs["run_id"]
         task["generation_id"] = kwargs["generation_id"]
         task.pop("input_fingerprint")
@@ -207,14 +223,23 @@ def _fake_r_prepare(
     }
 
 
-def _normalize(monkeypatch: pytest.MonkeyPatch, input_root: Path, reference: Path, output: Path):
+def _normalize(
+    monkeypatch: pytest.MonkeyPatch,
+    input_root: Path,
+    reference: Path,
+    output: Path,
+    *,
+    include_track_sha256: bool = True,
+):
     monkeypatch.setattr(
         "ssqtl_igv.ssqtl_adapter_v3.run_r_prepare",
         _fake_r_prepare,
     )
     monkeypatch.setattr(
         "ssqtl_igv.ssqtl_adapter_v3.normalize_manifest",
-        _fake_science_normalizer(reference),
+        _fake_science_normalizer(
+            reference, include_track_sha256=include_track_sha256
+        ),
     )
     return normalize_ssqtl_inputs(
         associations="associations.csv", rds_dir="rds", bam_lookup="bam_lookup.csv",
@@ -378,6 +403,29 @@ def test_raw_ssqtl_normalization_emits_native_v3_and_empty_group_evidence(
         "artifact_set_sha256"
     ]
     _assert_no_persisted_v2_or_stage_result(bundle)
+
+
+def test_ssqtl_master_normalization_does_not_hash_large_tracks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_root = _input_root(tmp_path / "input")
+    reference = _reference(tmp_path / "reference")
+    result = _normalize(
+        monkeypatch,
+        input_root,
+        reference,
+        tmp_path / "out",
+        include_track_sha256=False,
+    )
+    task = next(read_jsonl(result["tasks"]))
+    track = task["core"]["tracks"][0]
+    assert set(track["bam"]["identity"]) == {"size", "mtime_ns"}
+    assert set(track["bai"]["identity"]) == {"size", "mtime_ns"}
+    assert task["core"]["auxiliary"]["identity"]["sha256"]
+    assert all(
+        resource["identity"]["sha256"]
+        for resource in task["core"]["reference"]["resources"].values()
+    )
 
 
 def test_native_ssqtl_fingerprint_is_mount_independent_and_rds_sensitive(

@@ -2324,30 +2324,50 @@ def _expected_ssqtl_normalization_trace_bindings(
     ]
 
 
-def _canonical_resources(task: dict[str, Any]) -> list[dict[str, Any]]:
-    resources: list[dict[str, Any]] = []
+def _canonical_resources(
+    task: dict[str, Any],
+) -> list[tuple[str, dict[str, Any], bool]]:
+    resources: list[tuple[str, dict[str, Any], bool]] = []
     core = task["core"]
     for track in core["tracks"]:
-        resources.extend((track["bam"], track["bai"]))
-    resources.extend(core["reference"]["resources"].values())
+        resources.extend(
+            (
+                ("bam", track["bam"], False),
+                ("bai", track["bai"], False),
+            )
+        )
+    resources.extend(
+        (f"reference:{role}", resource, True)
+        for role, resource in core["reference"]["resources"].items()
+    )
     if core["auxiliary"]["state"] == "PRESENT":
-        resources.append(core["auxiliary"])
+        resources.append(("auxiliary", core["auxiliary"], True))
     return resources
 
 
 def _verify_canonical_input_identities(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Re-observe every READY input before launch; stat-only identities are forbidden."""
+    """Re-observe each unique READY input once before launching Nextflow.
 
-    observed: dict[tuple[str, str], dict[str, Any]] = {}
+    Large BAM/BAI resources intentionally use size and mtime identities. Fixed
+    reference and auxiliary resources retain content SHA-256 identities, which
+    are verified here once per unique source rather than once per render task.
+    """
+
+    observed: dict[str, dict[str, Any]] = {}
+    expected_by_path: dict[str, tuple[int, int, str]] = {}
     for task in tasks:
         if task["core"]["preflight"]["state"] != "READY":
             continue
-        for resource in _canonical_resources(task):
+        for role, resource, require_sha in _canonical_resources(task):
             identity = resource["identity"]
             expected_sha = str(identity.get("sha256") or "").lower()
-            if not re.fullmatch(r"[a-f0-9]{64}", expected_sha):
+            if require_sha and not expected_sha:
                 raise ValueError(
-                    f"READY task {task['task_id']} has a resource without content SHA-256"
+                    f"READY task {task['task_id']} {role} resource lacks content SHA-256"
+                )
+            if expected_sha and not re.fullmatch(r"[a-f0-9]{64}", expected_sha):
+                raise ValueError(
+                    f"READY task {task['task_id']} {role} resource has an invalid SHA-256"
                 )
             source = Path(str(resource["source_path"])).expanduser()
             if source.is_symlink():
@@ -2355,22 +2375,30 @@ def _verify_canonical_input_identities(tasks: list[dict[str, Any]]) -> dict[str,
             resolved = source.resolve(strict=True)
             if not resolved.is_file():
                 raise ValueError(f"canonical source is not a regular file: {resolved}")
-            key = (str(resolved), expected_sha)
+            expected_size = int(identity.get("size", -1))
+            expected_mtime = int(identity.get("mtime_ns", -1))
+            key = str(resolved)
+            expected_tuple = (expected_size, expected_mtime, expected_sha)
+            prior_expected = expected_by_path.get(key)
+            if prior_expected is not None and prior_expected != expected_tuple:
+                raise ValueError(f"canonical source has conflicting identities: {resolved}")
             if key in observed:
                 continue
             stat = resolved.stat()
-            if int(identity.get("size", -1)) != stat.st_size:
+            if expected_size != stat.st_size:
                 raise ValueError(f"canonical source size changed: {resolved}")
-            if int(identity.get("mtime_ns", -1)) != stat.st_mtime_ns:
+            if expected_mtime != stat.st_mtime_ns:
                 raise ValueError(f"canonical source mtime changed: {resolved}")
-            actual_sha = sha256_file(resolved)
-            if actual_sha != expected_sha:
+            actual_sha = sha256_file(resolved) if expected_sha else ""
+            if expected_sha and actual_sha != expected_sha:
                 raise ValueError(f"canonical source content changed: {resolved}")
+            expected_by_path[key] = expected_tuple
             observed[key] = {
                 "path": str(resolved),
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
-                "sha256": actual_sha,
+                "identity_mode": "sha256" if expected_sha else "metadata",
+                **({"sha256": actual_sha} if expected_sha else {}),
             }
     return {
         "schema_version": "3.0-input-revalidation",
