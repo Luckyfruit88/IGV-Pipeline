@@ -81,6 +81,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          # The native driver avoids keeping a second, multi-gigabyte BuildKit
+          # image store while loading this single-platform CI image.
+          driver: docker
 
       - name: Build the pull-and-run image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
