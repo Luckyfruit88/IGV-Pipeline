@@ -298,7 +298,7 @@ def _ssqtl_bam_lookup_resource_binding(
         fallback_matches = [
             candidate
             for candidate in sorted(lookup_path.iterdir(), key=lambda item: item.name)
-            if fallback.search(candidate.name)
+            if not candidate.name.startswith(".") and fallback.search(candidate.name)
         ]
         if len(fallback_matches) == 1:
             selected = fallback_matches[0]

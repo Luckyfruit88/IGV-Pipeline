@@ -165,10 +165,16 @@ docker run --rm --platform linux/amd64 \
   ghcr.io/luckyfruit88/igv-pipeline:3.0.0 run --resume
 ```
 
-The embedded runtime manifest is validated automatically. Its fingerprint is a
-real Nextflow input. Changes to metadata, reference files, render policy, or the
-runtime prevent silent reuse of an incompatible cache. Outputs from an older
-unreleased v3 candidate must use a new output directory.
+The embedded runtime manifest is validated automatically, and its fingerprint
+is a real Nextflow input. Small control files use content hashes; large
+scientific inputs use the standard Nextflow file identity of path, size, and
+nanosecond mtime during resume checks. Reference resources and selected
+RDS/PDF inputs are also content-hashed in canonical tasks. Do not replace a
+large input while preserving both its size and mtime; when restoring such a
+snapshot, use a new output/work directory or advance the file mtime. Changes
+observable under this identity, or changes to render policy or runtime, prevent
+silent reuse of an incompatible cache. Outputs from an older unreleased v3
+candidate must use a new output directory.
 
 For a read-only root filesystem, add:
 
@@ -449,8 +455,12 @@ docker run --rm --platform linux/amd64 \
 ```
 
 镜像内置的 runtime manifest 会自动验证，其 fingerprint 是真实 Nextflow input。
-metadata、reference、render policy 或 runtime 任一变化都不能静默复用不兼容
-cache。旧的未发布 v3 candidate 输出必须改用新的 output 目录。
+小型控制文件按内容哈希；大型科学输入在 resume 检查中采用 Nextflow 标准的
+`path + size + 纳秒 mtime` 身份。reference 资源以及实际选中的 RDS/PDF 也会在
+canonical task 中记录内容哈希。不要在同时保留 size 和 mtime 的情况下替换大型
+输入；若从保留时间戳的快照恢复文件，请改用新的 output/work 目录，或推进文件
+mtime。该身份可观测到的变化，以及 render policy 或 runtime 变化，都会阻止静默
+复用不兼容 cache。旧的未发布 v3 candidate 输出必须改用新的 output 目录。
 
 如需只读 rootfs，可额外加入：
 

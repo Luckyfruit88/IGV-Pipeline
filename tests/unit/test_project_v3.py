@@ -237,6 +237,9 @@ def test_ssqtl_source_binding_tracks_directory_file_metadata(tmp_path: Path) -> 
         direct_still_selected["inputs"]["bam_lookup"]["eligible_resources"]
     )
 
+    # R list.files() excludes dotfiles unless all.files=TRUE.  The Python
+    # source binding must freeze the same visible fallback that R selects.
+    (tmp_path / "tracks" / ".sample-1.hidden.bam").write_bytes(b"hidden")
     (tmp_path / "tracks" / "sample-1.bam").unlink()
     fallback_selected = build_project_source_binding(load_project_config(project))
     assert direct_still_selected["inputs"]["bam_lookup"]["eligible_resources"][
@@ -244,6 +247,12 @@ def test_ssqtl_source_binding_tracks_directory_file_metadata(tmp_path: Path) -> 
     ] != fallback_selected["inputs"]["bam_lookup"]["eligible_resources"][
         "inventory_sha256"
     ]
+    assert [
+        item["path"]
+        for item in fallback_selected["inputs"]["bam_lookup"]["eligible_resources"][
+            "files"
+        ]
+    ] == ["tracks/sample-1.secondary.bam"]
 
 
 def test_ssqtl_source_binding_does_not_hash_large_scientific_inputs(

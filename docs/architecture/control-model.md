@@ -50,9 +50,14 @@ conflicting scheduler record.
 
 Input or runtime self-test failures stop before rendering. A per-case failure
 retains successful cases, emits `failed_cases.tsv`, and exits `2`; correction
-creates a new attempt or generation without rewriting prior evidence. A
-runtime, reference, render-policy, or input change changes the frozen
-fingerprint and therefore cannot silently reuse the previous cache identity.
+creates a new attempt or generation without rewriting prior evidence. Runtime
+and render-policy changes alter the frozen fingerprint. Small control files
+use content hashes, while large scientific inputs use the standard Nextflow
+file identity of path, size, and nanosecond mtime for resume. Reference
+resources and selected RDS/PDF inputs are additionally content-hashed in
+canonical tasks. Replacing a large input while deliberately preserving both
+size and mtime is outside that identity and requires a new output/work
+directory (or an advanced mtime) before resume.
 
 The system is stable under interruption because Nextflow owns execution and
 resume, output promotion is atomic, and optional campaign locks protect only
