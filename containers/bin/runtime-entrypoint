@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly cli=/opt/igv-helper/bin/igv-snapshot
+
+fail() {
+    printf 'runtime-entrypoint: %s\n' "$1" >&2
+    exit 64
+}
+
+[[ "$(id -u)" != 0 ]] || fail "runtime must not execute as root"
+
+prepare_writable_runtime() {
+    local output_root=${IGV_OUTPUT_ROOT:-/output}
+    [[ -d "${output_root}" && -w "${output_root}" ]] \
+        || fail "writable output mount is unavailable: ${output_root}"
+    local state_root=${IGV_RUNTIME_STATE_ROOT:-${output_root}/.runtime}
+    mkdir -p "${state_root}/home" "${state_root}/nextflow"
+    export HOME="${state_root}/home"
+    export NXF_HOME="${state_root}/nextflow"
+}
+
+if (($# == 0)); then
+    exec "${cli}" --help
+fi
+
+# Nextflow 25.04.7 uses one of two exact Docker launchers. Metrics-enabled
+# trace execution enters .command.run with the nxf_trace action; the simpler
+# launcher enters .command.sh with bash -ue. Do not turn the production
+# entrypoint into a general command executor.
+if [[ "$1" == "/bin/bash" ]]; then
+    if (($# == 3)) && [[ "$2" == "-ue" && "$3" == /*/.command.sh ]]; then
+        [[ -f "$3" && ! -L "$3" ]] || fail "worker .command.sh must be a non-symlink regular file"
+        exec /bin/bash -ue "$3"
+    fi
+    if (($# == 3)) && [[ "$2" == /*/.command.run && "$3" == "nxf_trace" ]]; then
+        [[ -f "$2" && ! -L "$2" ]] || fail "worker .command.run must be a non-symlink regular file"
+        exec /bin/bash "$2" nxf_trace
+    fi
+    fail "worker shell does not match an approved Nextflow 25.04.7 launcher"
+fi
+
+if [[ "$1" == "igv-snapshot" ]]; then
+    shift
+    if (($# == 0)); then
+        exec "${cli}" --help
+    fi
+fi
+
+case "$1" in
+    doctor|run|review|publish|campaign)
+        prepare_writable_runtime
+        if [[ "$1" == "run" || \
+              ( "$1" == "campaign" && \
+                ( "${2:-}" == "prepare-master" || "${2:-}" == "run-batch" ) ) ]]; then
+            /usr/local/bin/runtime-self-test >/dev/null
+        fi
+        exec "${cli}" "$@"
+        ;;
+    init|import-v2)
+        exec "${cli}" "$@"
+        ;;
+    --help|-h|--version)
+        exec "${cli}" "$@"
+        ;;
+    *)
+        fail "unsupported command; use igv-snapshot or the exact Nextflow worker shell contract"
+        ;;
+esac

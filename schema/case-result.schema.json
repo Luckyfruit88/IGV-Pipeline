@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/case-result.schema.json",
+  "title": "Terminal or review-pending case result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "pipeline_version", "run_id", "generation_id", "shard_id",
+    "session_id", "task_id", "manifest_order", "attempt", "input_fingerprint",
+    "render_state", "evidence_state", "artifact_review_state",
+    "scientific_interpretation", "publication_state", "empty_genotype_groups",
+    "artifacts", "stage_bundles", "warnings", "failures", "rerun_eligible",
+    "rerun_reason", "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "pipeline_version": {"const": "2.0.0"},
+    "run_id": {"$ref": "#/$defs/safeId"},
+    "generation_id": {"$ref": "#/$defs/safeId"},
+    "shard_id": {"$ref": "#/$defs/safeId"},
+    "session_id": {"$ref": "#/$defs/safeIdLong"},
+    "task_id": {"$ref": "#/$defs/safeIdLong"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"},
+    "render_state": {"enum": ["PENDING", "SUCCEEDED", "FAILED"]},
+    "evidence_state": {"enum": ["COMPLETE", "EVIDENCE_INCOMPLETE", "UNAVAILABLE"]},
+    "artifact_review_state": {"enum": ["REVIEW_PENDING", "APPROVE", "REJECT"]},
+    "scientific_interpretation": {"enum": ["PENDING", "SUPPORTED", "NOT_SUPPORTED", "INDETERMINATE"]},
+    "publication_state": {"enum": ["NOT_READY", "READY", "PUBLISHED", "WITHHELD"]},
+    "empty_genotype_groups": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["0/0", "0/1", "1/1"]}
+    },
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+    "stage_bundles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "validate_case_inputs": {"$ref": "#/$defs/bundleRef"},
+        "run_igv": {"$ref": "#/$defs/bundleRef"},
+        "compose_case": {"$ref": "#/$defs/bundleRef"},
+        "qc_case": {"$ref": "#/$defs/bundleRef"}
+      }
+    },
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
+    "failures": {"type": "array", "items": {"$ref": "#/$defs/failure"}},
+    "rerun_eligible": {"type": "boolean"},
+    "rerun_reason": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "safeIdLong": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "relative_path", "sha256", "size"],
+      "properties": {
+        "role": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 0}
+      }
+    },
+    "bundleRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "status"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"enum": ["SUCCEEDED", "DOMAIN_FAILED"]}
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "class", "code", "message", "rerun_eligible"],
+      "properties": {
+        "stage": {"enum": ["VALIDATE_CASE_INPUTS", "RUN_IGV", "COMPOSE_CASE", "QC_CASE", "MANUAL_REVIEW"]},
+        "class": {"const": "DOMAIN"},
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string"},
+        "rerun_eligible": {"type": "boolean"}
+      }
+    }
+  }
+}

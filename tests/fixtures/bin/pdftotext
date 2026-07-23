@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'chrA:2-3 chrA.4_T.C\f'

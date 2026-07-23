@@ -1,0 +1,66 @@
+{
+  "schema_version": "igv-runtime-materials-v1",
+  "platform": "linux/amd64",
+  "base_image": {
+    "reference": "docker.io/library/almalinux@sha256:f043b7ac550015e1ed0b5a55a420c61d178bff4357ab9663fe0fbdcf1e6e2d86",
+    "linux_amd64_manifest_digest": "sha256:f043b7ac550015e1ed0b5a55a420c61d178bff4357ab9663fe0fbdcf1e6e2d86"
+  },
+  "external_artifacts": {
+    "micromamba": {
+      "version": "2.6.2-1",
+      "url": "https://github.com/mamba-org/micromamba-releases/releases/download/2.6.2-1/micromamba-linux-64",
+      "sha256": "e9683b483df06dbd3fdd8a37f1b6826d7e5caf4e85bf15a0af4fbad3d4ad1a58"
+    },
+    "igv_linux_with_java": {
+      "version": "2.16.2",
+      "java_major": 11,
+      "url": "https://data.broadinstitute.org/igv/projects/downloads/2.16/IGV_Linux_2.16.2_WithJava.zip",
+      "sha256": "0b7a9351598a27140ebd995f07e478b668c9e512d8f17964be1ce64e556527e7"
+    },
+    "temurin_controller_jre": {
+      "version": "21.0.8+9",
+      "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.8%2B9/OpenJDK21U-jre_x64_linux_hotspot_21.0.8_9.tar.gz",
+      "sha256": "968c283e104059dae86ea1d670672a80170f27a39529d815843ec9c1f0fa2a03"
+    },
+    "nextflow_one_jar": {
+      "version": "25.04.7",
+      "url": "https://www.nextflow.io/releases/v25.04.7/nextflow-25.04.7-one.jar",
+      "sha256": "231a3c0fc7bae88add57ab420e9c6306ee35ff87b6af356cd2d8aa56347472f3"
+    },
+    "nextflow_launcher": {
+      "version": "25.04.7",
+      "url": "https://www.nextflow.io/releases/v25.04.7/nextflow",
+      "sha256": "a57f804243c6fa3b1e3194ab05a054f7799b5d4423049b62bbb171530dba9fe2"
+    }
+  },
+  "explicit_environment_locks": {
+    "fonts-local.conf": "a7ed4b32a28619dd7a97b833c85e031a2adc0dd94831d174e1b42d6799d5ed26",
+    "runtime-system-packages.lock": "3cb46056d833830f9053a6c23c23171d73ff55d49c1f3dd29467c298702eedc6",
+    "helper-linux-64.lock": "506d55d97089dbd11c91a3e0ecf1ef30c85c67785a26b9a751f93a3910224246",
+    "samtools-linux-64.lock": "18b50750e46dcf4f4c4ac4c5a347548a1be332c3067188acfdf3150aab4d770e",
+    "materials.lock.json": "ab4be5837fae72ebf1eebfe75a1f60ef423c708ecdbdab6bebc5e8dff0260231"
+  },
+  "tool_contract": {
+    "igv": "2.16.2",
+    "igv_jre": "11",
+    "nextflow": "25.04.7",
+    "controller_java": "21.0.8+9",
+    "python": "3.10.12",
+    "r": "4.5.2",
+    "samtools": "1.18",
+    "poppler": "26.07.0",
+    "imagemagick": "7.1.2_27",
+    "fontconfig": "2.18.1",
+    "fonts": "DejaVu Sans",
+    "tesseract": "5.5.2",
+    "xvfb": "1.20.11-28.el8_10.3"
+  },
+  "render_contract": {
+    "screen": "1920x2160x24",
+    "igv_heap": "6g",
+    "locale": "C.UTF-8",
+    "font_family": "DejaVu Sans",
+    "command_listener_enabled": false,
+    "network": "disabled_at_runtime"
+  }
+}

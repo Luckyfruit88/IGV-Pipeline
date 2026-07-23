@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/campaign-ledger-event-v3.schema.json",
+  "title": "IGV Pipeline scientific campaign ledger event 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "campaign_contract_sha256", "sequence",
+    "recorded_at", "actor", "batch_id", "event_type", "payload",
+    "previous_event_sha256", "event_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0-campaign-ledger-event"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "actor": {"type": "string", "minLength": 1, "maxLength": 200},
+    "batch_id": {"$ref": "#/$defs/safeId"},
+    "event_type": {
+      "enum": [
+        "SELECTION_FROZEN", "HUMAN_DECISION", "REVIEW_FINALIZED",
+        "NEXT_BATCH_AUTHORIZED"
+      ]
+    },
+    "payload": {"type": "object"},
+    "previous_event_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "event_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

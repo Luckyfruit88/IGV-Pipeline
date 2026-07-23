@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/stage-result.schema.json",
+  "title": "Always-emitted case stage bundle result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "bundle_version", "run_id", "generation_id", "shard_id", "session_id",
+    "task_id", "manifest_order", "attempt", "stage", "status", "input_fingerprint",
+    "started_at", "finished_at", "artifacts", "warnings", "failures", "telemetry"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "bundle_version": {"const": "1.0"},
+    "run_id": {"$ref": "#/$defs/safeId"},
+    "generation_id": {"$ref": "#/$defs/safeId"},
+    "shard_id": {"$ref": "#/$defs/safeId"},
+    "session_id": {"$ref": "#/$defs/safeIdLong"},
+    "task_id": {"$ref": "#/$defs/safeIdLong"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "stage": {"enum": ["VALIDATE_CASE_INPUTS", "RUN_IGV", "COMPOSE_CASE", "QC_CASE"]},
+    "status": {"enum": ["SUCCEEDED", "DOMAIN_FAILED"]},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
+    "failures": {"type": "array", "items": {"$ref": "#/$defs/failure"}},
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_time_seconds", "peak_rss_gb"],
+      "properties": {
+        "wall_time_seconds": {"type": "number", "minimum": 0},
+        "peak_rss_gb": {"type": ["number", "null"], "minimum": 0},
+        "exit_code": {"type": ["integer", "null"]}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "SUCCEEDED"}}},
+      "then": {"properties": {"failures": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "DOMAIN_FAILED"}}},
+      "then": {"properties": {"failures": {"minItems": 1}}}
+    }
+  ],
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "safeIdLong": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "relative_path", "sha256", "size"],
+      "properties": {
+        "role": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 0}
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "code", "message", "rerun_eligible"],
+      "properties": {
+        "class": {"const": "DOMAIN"},
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string"},
+        "rerun_eligible": {"type": "boolean"}
+      }
+    }
+  }
+}

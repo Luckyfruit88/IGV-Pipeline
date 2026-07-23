@@ -1,0 +1,205 @@
+name: pilot-candidate-oci
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: pilot-candidate-${{ github.repository }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-pilot-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      IMAGE: ghcr.io/luckyfruit88/igv-pipeline
+    steps:
+      - name: Check out the dispatched source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Require the public main candidate commit
+        id: source
+        env:
+          REPOSITORY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Luckyfruit88/IGV-Pipeline"
+          test "$REPOSITORY_PRIVATE" = "false"
+          test "$REPOSITORY_DEFAULT_BRANCH" = "main"
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$GITHUB_SHA" = "$(git rev-parse refs/remotes/origin/main)"
+          test -z "$(git status --porcelain)"
+          printf 'commit=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          printf 'tag=pilot-%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing pilot candidate
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="luckyfruit88/igv-pipeline"
+          candidate_tag='${{ steps.source.outputs.tag }}'
+          token="$(
+            curl --fail-with-body --silent --show-error --location \
+              --user "${GITHUB_ACTOR}:${GHCR_TOKEN}" \
+              --get \
+              --data-urlencode 'service=ghcr.io' \
+              --data-urlencode "scope=repository:${repository}:pull" \
+              https://ghcr.io/token |
+              jq -er '.token // .access_token'
+          )"
+          status="$(
+            curl --silent --show-error \
+              --output "${RUNNER_TEMP}/candidate-manifest-response.txt" \
+              --write-out '%{http_code}' \
+              --head \
+              --header "Authorization: Bearer ${token}" \
+              --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/${repository}/manifests/${candidate_tag}"
+          )"
+          if [[ "$status" == "200" ]]; then
+            printf 'pilot candidate already exists and is immutable: %s\n' \
+              "${IMAGE}:${candidate_tag}" >&2
+            exit 1
+          fi
+          if [[ "$status" != "404" ]]; then
+            printf 'cannot prove pilot candidate absence (registry HTTP %s)\n' \
+              "$status" >&2
+            exit 1
+          fi
+
+      - name: Build and push the single linux/amd64 pilot candidate
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: containers/runtime.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.source.outputs.tag }}
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            SOURCE_COMMIT=${{ steps.source.outputs.commit }}
+            SOURCE_TREE=${{ steps.source.outputs.tree }}
+
+      - name: Verify the registry digest and platform set
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="${IMAGE}:${{ steps.source.outputs.tag }}"
+          manifest="${RUNNER_TEMP}/pilot-manifest.json"
+          docker buildx imagetools inspect "$candidate" \
+            --format '{{json .Manifest}}' > "$manifest"
+          registry_digest="$(jq -r '.digest' "$manifest")"
+          [[ "$registry_digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          test "$registry_digest" = '${{ steps.build.outputs.digest }}'
+          jq -e '
+            [
+              .manifests[]
+              | select(
+                  .platform.os != "unknown"
+                  or .platform.architecture != "unknown"
+                )
+              | [.platform.os, .platform.architecture]
+            ] == [["linux", "amd64"]]
+          ' "$manifest" >/dev/null
+
+      - name: Run the hardened self-test by immutable digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          immutable="${IMAGE}@${{ steps.build.outputs.digest }}"
+          docker run --rm \
+            --pull always \
+            --platform linux/amd64 \
+            --user 65532:65532 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+            --tmpfs /run/home:rw,noexec,nosuid,nodev,size=256m,uid=65532,gid=65532,mode=0700 \
+            --tmpfs /output:rw,nosuid,nodev,size=512m,uid=65532,gid=65532,mode=0750 \
+            --entrypoint runtime-self-test \
+            "$immutable"
+
+      - name: Verify the embedded source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          immutable="${IMAGE}@${{ steps.build.outputs.digest }}"
+          docker run --rm \
+            --pull always \
+            --platform linux/amd64 \
+            --user 65532:65532 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --network none \
+            --entrypoint /opt/igv-helper/bin/python \
+            "$immutable" \
+            -c 'import json; print(json.dumps(json.load(open("/opt/igv-pipeline/runtime-manifest.json", encoding="utf-8"))["source"], sort_keys=True))' \
+            > embedded-source.json
+          jq -e \
+            --arg commit '${{ steps.source.outputs.commit }}' \
+            --arg tree '${{ steps.source.outputs.tree }}' \
+            '. == {"commit": $commit, "tree": $tree}' \
+            embedded-source.json >/dev/null
+
+      - name: Write plain candidate digest evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ steps.source.outputs.commit }}' \
+            > SOURCE_COMMIT.txt
+          printf '%s\n' '${{ steps.source.outputs.tree }}' \
+            > SOURCE_TREE.txt
+          printf '%s\n' '${{ steps.build.outputs.digest }}' \
+            > OCI_DIGEST.txt
+          printf '%s@%s\n' "$IMAGE" '${{ steps.build.outputs.digest }}' \
+            > OCI_REFERENCE.txt
+          sha256sum \
+            SOURCE_COMMIT.txt \
+            SOURCE_TREE.txt \
+            OCI_DIGEST.txt \
+            OCI_REFERENCE.txt \
+            embedded-source.json \
+            > SHA256SUMS
+
+      - name: Upload candidate evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: igv-pipeline-${{ steps.source.outputs.tag }}-evidence
+          path: |
+            SOURCE_COMMIT.txt
+            SOURCE_TREE.txt
+            OCI_DIGEST.txt
+            OCI_REFERENCE.txt
+            embedded-source.json
+            SHA256SUMS
+          if-no-files-found: error

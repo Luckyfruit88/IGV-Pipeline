@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/review.schema.json",
+  "title": "Append-only human review record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "review_record_id", "run_id", "generation_id", "task_id",
+    "manifest_order", "input_fingerprint", "case_result_sha256", "combined_sha256",
+    "left_pixel_sha256", "scientific_qc_sha256", "figure_contract_id",
+    "gui_settle_contract_id", "artifact_review_state", "scientific_interpretation",
+    "reviewer", "reviewed_at", "notes", "manual_assertions"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "review_record_id": {"$ref": "#/$defs/safeIdLong"},
+    "run_id": {"$ref": "#/$defs/safeId"},
+    "generation_id": {"$ref": "#/$defs/safeId"},
+    "task_id": {"$ref": "#/$defs/safeIdLong"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"},
+    "case_result_sha256": {"$ref": "#/$defs/sha256"},
+    "combined_sha256": {"$ref": "#/$defs/sha256"},
+    "left_pixel_sha256": {"$ref": "#/$defs/sha256"},
+    "scientific_qc_sha256": {"$ref": "#/$defs/sha256"},
+    "figure_contract_id": {"type": "string", "minLength": 1},
+    "gui_settle_contract_id": {"type": "string", "minLength": 1},
+    "artifact_review_state": {"enum": ["APPROVE", "REJECT"]},
+    "scientific_interpretation": {"enum": ["SUPPORTED", "NOT_SUPPORTED", "INDETERMINATE"]},
+    "reviewer": {"type": "string", "minLength": 1},
+    "reviewed_at": {"type": "string", "format": "date-time"},
+    "notes": {"type": "string"},
+    "manual_assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "native_igv_complete_and_readable",
+        "annotation_track_and_model_visible",
+        "strand_and_transcript_reviewed",
+        "ag_site_and_reference_ag_context_reviewed",
+        "splice_or_junction_presence_absence_judgeable",
+        "violin_pair_matches"
+      ],
+      "properties": {
+        "native_igv_complete_and_readable": {"type": "boolean"},
+        "annotation_track_and_model_visible": {"type": "boolean"},
+        "strand_and_transcript_reviewed": {"type": "boolean"},
+        "ag_site_and_reference_ag_context_reviewed": {"type": "boolean"},
+        "splice_or_junction_presence_absence_judgeable": {"type": "boolean"},
+        "violin_pair_matches": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "safeIdLong": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

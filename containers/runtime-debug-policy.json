@@ -1,0 +1,20 @@
+{
+  "schema_version": "igv-runtime-debug-policy-v1",
+  "image_role": "runtime-debug",
+  "artifact_class": "DEBUG_ONLY",
+  "host_publish_address": "127.0.0.1",
+  "container_novnc_port": 6080,
+  "container_vnc_address": "127.0.0.1",
+  "container_vnc_port": 5900,
+  "production_eligible": false,
+  "review_eligible": false,
+  "publication_eligible": false,
+  "required_output_root": "/run/debug-only",
+  "required_marker": "DEBUG_ONLY.json",
+  "prohibited_mounts": [
+    "/",
+    "/root",
+    "/home",
+    "/var/run/docker.sock"
+  ]
+}

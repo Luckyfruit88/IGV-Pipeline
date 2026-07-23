@@ -1,0 +1,599 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/task-v3.schema.json",
+  "title": "IGV portable canonical task schema 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "pipeline_version",
+    "run_id",
+    "generation_id",
+    "task_id",
+    "manifest_order",
+    "adapter_id",
+    "core",
+    "adapter_data",
+    "estimated_runtime_seconds",
+    "input_fingerprint"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0"},
+    "pipeline_version": {"const": "3.0.0"},
+    "run_id": {"$ref": "#/$defs/safeId"},
+    "generation_id": {"$ref": "#/$defs/safeId"},
+    "task_id": {"$ref": "#/$defs/safeIdLong"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "adapter_id": {"enum": ["generic", "ssqtl"]},
+    "core": {"$ref": "#/$defs/core"},
+    "adapter_data": {
+      "oneOf": [
+        {"$ref": "#/$defs/genericAdapter"},
+        {"$ref": "#/$defs/ssqtlAdapter"}
+      ]
+    },
+    "estimated_runtime_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"adapter_id": {"const": "generic"}}},
+      "then": {
+        "properties": {
+          "adapter_data": {"$ref": "#/$defs/genericAdapter"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"adapter_id": {"const": "ssqtl"}}},
+      "then": {
+        "properties": {
+          "adapter_data": {"$ref": "#/$defs/ssqtlAdapter"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    },
+    "safeIdLong": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
+    },
+    "safeStageName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\].*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "fileIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "mtime_ns"],
+      "properties": {
+        "size": {"type": "integer", "minimum": 0},
+        "mtime_ns": {"type": "integer", "minimum": 0},
+        "sha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "fileResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "declared_path",
+        "source_path",
+        "stage_name",
+        "identity"
+      ],
+      "properties": {
+        "declared_path": {"$ref": "#/$defs/relativePath"},
+        "source_path": {"$ref": "#/$defs/absolutePath"},
+        "stage_name": {"$ref": "#/$defs/safeStageName"},
+        "identity": {"$ref": "#/$defs/fileIdentity"}
+      }
+    },
+    "locus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "contig", "start", "end", "coordinate_system"],
+      "properties": {
+        "raw": {"type": "string", "minLength": 1},
+        "contig": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        },
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1},
+        "coordinate_system": {"const": "1-based-inclusive"}
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "track_order",
+        "track_label",
+        "group",
+        "bam",
+        "bai"
+      ],
+      "properties": {
+        "track_order": {"type": "integer", "minimum": 1},
+        "track_label": {"type": "string", "minLength": 1},
+        "group": {"type": ["string", "null"]},
+        "bam": {"$ref": "#/$defs/fileResource"},
+        "bai": {"$ref": "#/$defs/fileResource"}
+      }
+    },
+    "absentAuxiliary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {"const": "ABSENT"}
+      }
+    },
+    "presentAuxiliary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "kind",
+        "declared_path",
+        "source_path",
+        "stage_name",
+        "page",
+        "identity"
+      ],
+      "properties": {
+        "state": {"const": "PRESENT"},
+        "kind": {"enum": ["PNG", "JPEG", "PDF"]},
+        "declared_path": {"$ref": "#/$defs/relativePath"},
+        "source_path": {"$ref": "#/$defs/absolutePath"},
+        "stage_name": {"$ref": "#/$defs/safeStageName"},
+        "page": {"type": ["integer", "null"], "minimum": 1},
+        "identity": {"$ref": "#/$defs/fileIdentity"}
+      }
+    },
+    "referenceBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "version",
+        "resource_fingerprint",
+        "resources"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "resource_fingerprint": {"$ref": "#/$defs/sha256"},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["definition", "fasta", "fai", "cytoband", "annotation"],
+          "properties": {
+            "definition": {"$ref": "#/$defs/fileResource"},
+            "fasta": {"$ref": "#/$defs/fileResource"},
+            "fai": {"$ref": "#/$defs/fileResource"},
+            "cytoband": {"$ref": "#/$defs/fileResource"},
+            "annotation": {"$ref": "#/$defs/fileResource"}
+          }
+        }
+      }
+    },
+    "renderContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "screen_width",
+        "screen_height",
+        "screen_depth",
+        "igv_version",
+        "igv_java_version",
+        "igv_heap_gb",
+        "locale",
+        "font_contract_id",
+        "command_listener_enabled",
+        "gui_settle_contract_id",
+        "ocr_contract_id",
+        "pixel_contract_id",
+        "policy_fingerprint"
+      ],
+      "properties": {
+        "screen_width": {"type": "integer", "minimum": 1},
+        "screen_height": {"type": "integer", "minimum": 1},
+        "screen_depth": {"type": "integer", "minimum": 1},
+        "igv_version": {"type": "string", "minLength": 1},
+        "igv_java_version": {"type": "string", "minLength": 1},
+        "igv_heap_gb": {"type": "number", "exclusiveMinimum": 0},
+        "locale": {"type": "string", "minLength": 1},
+        "font_contract_id": {"type": "string", "minLength": 1},
+        "command_listener_enabled": {"const": false},
+        "gui_settle_contract_id": {"type": "string", "minLength": 1},
+        "ocr_contract_id": {"type": "string", "minLength": 1},
+        "pixel_contract_id": {"type": "string", "minLength": 1},
+        "policy_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string"}
+      }
+    },
+    "preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "warnings", "errors"],
+      "properties": {
+        "state": {"enum": ["READY", "CASE_INPUT_INVALID"]},
+        "warnings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/issue"}
+        },
+        "errors": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/issue"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "READY"}}},
+          "then": {"properties": {"errors": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"state": {"const": "CASE_INPUT_INVALID"}}},
+          "then": {"properties": {"errors": {"minItems": 1}}}
+        }
+      ]
+    },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "locus",
+        "strand",
+        "tracks",
+        "auxiliary",
+        "reference",
+        "render_contract",
+        "preflight"
+      ],
+      "properties": {
+        "locus": {"$ref": "#/$defs/locus"},
+        "strand": {"enum": ["+", "-"]},
+        "tracks": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/track"}
+        },
+        "auxiliary": {
+          "oneOf": [
+            {"$ref": "#/$defs/absentAuxiliary"},
+            {"$ref": "#/$defs/presentAuxiliary"}
+          ]
+        },
+        "reference": {"$ref": "#/$defs/referenceBundle"},
+        "render_contract": {"$ref": "#/$defs/renderContract"},
+        "preflight": {"$ref": "#/$defs/preflight"}
+      }
+    },
+    "genericAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_schema_version", "scientific_interpretation"],
+      "properties": {
+        "adapter_schema_version": {"const": "3.0-generic"},
+        "scientific_interpretation": {"const": "NOT_APPLICABLE"}
+      }
+    },
+    "ssqtlAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_schema_version",
+        "scientific_interpretation",
+        "association",
+        "figure_contract_id",
+        "gui_settle_contract_id",
+        "ag",
+        "snp",
+        "regions",
+        "statistics",
+        "genotype_groups",
+        "selected_samples",
+        "violin",
+        "reference_context",
+        "scientific_render_contract",
+        "preparation_evidence",
+        "shard_hint"
+      ],
+      "properties": {
+        "adapter_schema_version": {"const": "3.0-ssqtl"},
+        "scientific_interpretation": {
+          "enum": ["PENDING", "SUPPORTED", "NOT_SUPPORTED", "INDETERMINATE"]
+        },
+        "association": {"$ref": "#/$defs/ssqtlAssociation"},
+        "figure_contract_id": {"type": "string", "minLength": 1},
+        "gui_settle_contract_id": {"type": "string", "minLength": 1},
+        "ag": {"$ref": "#/$defs/ssqtlAg"},
+        "snp": {"$ref": "#/$defs/ssqtlSnp"},
+        "regions": {"$ref": "#/$defs/ssqtlRegions"},
+        "statistics": {"$ref": "#/$defs/ssqtlStatistics"},
+        "genotype_groups": {"$ref": "#/$defs/ssqtlGenotypeGroups"},
+        "selected_samples": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ssqtlSelectedSample"}
+        },
+        "violin": {
+          "oneOf": [
+            {"$ref": "#/$defs/ssqtlPresentViolin"},
+            {"$ref": "#/$defs/ssqtlUnavailableViolin"}
+          ]
+        },
+        "reference_context": {
+          "oneOf": [
+            {"$ref": "#/$defs/ssqtlAvailableReferenceContext"},
+            {"$ref": "#/$defs/ssqtlUnavailableReferenceContext"}
+          ]
+        },
+        "scientific_render_contract": {"$ref": "#/$defs/ssqtlRenderContract"},
+        "preparation_evidence": {"$ref": "#/$defs/ssqtlPreparationEvidence"},
+        "shard_hint": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "ssqtlAssociation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row", "input_sha256"],
+      "properties": {
+        "row": {"type": "integer", "minimum": 1},
+        "input_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ssqtlAg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "chrom", "source_start", "source_end", "start", "end"],
+      "properties": {
+        "raw": {"type": "string", "minLength": 1},
+        "chrom": {"type": "string", "pattern": "^chr[A-Za-z0-9_.-]+$"},
+        "source_start": {"type": "integer", "minimum": 1},
+        "source_end": {"type": "integer", "minimum": 1},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1}
+      }
+    },
+    "ssqtlSnp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "chrom", "position", "ref", "alt"],
+      "properties": {
+        "raw": {"type": "string", "minLength": 1},
+        "chrom": {"type": "string", "pattern": "^chr[A-Za-z0-9_.-]+$"},
+        "position": {"type": "integer", "minimum": 1},
+        "ref": {"type": "string", "pattern": "^[ACGTN]+$"},
+        "alt": {"type": "string", "pattern": "^[ACGTN]+$"}
+      }
+    },
+    "ssqtlRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chrom", "start", "end"],
+      "properties": {
+        "chrom": {"type": "string", "pattern": "^chr[A-Za-z0-9_.-]+$"},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1}
+      }
+    },
+    "ssqtlRegions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overview", "detail"],
+      "properties": {
+        "overview": {"$ref": "#/$defs/ssqtlRegion"},
+        "detail": {"$ref": "#/$defs/ssqtlRegion"}
+      }
+    },
+    "nullableNumber": {"type": ["number", "null"]},
+    "ssqtlStatistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "n_total", "n_0", "n_1", "n_2", "eligible_n_0", "eligible_n_1",
+        "eligible_n_2", "beta", "abs_tvalue"
+      ],
+      "properties": {
+        "n_total": {"$ref": "#/$defs/nullableNumber"},
+        "n_0": {"$ref": "#/$defs/nullableNumber"},
+        "n_1": {"$ref": "#/$defs/nullableNumber"},
+        "n_2": {"$ref": "#/$defs/nullableNumber"},
+        "eligible_n_0": {"$ref": "#/$defs/nullableNumber"},
+        "eligible_n_1": {"$ref": "#/$defs/nullableNumber"},
+        "eligible_n_2": {"$ref": "#/$defs/nullableNumber"},
+        "beta": {"$ref": "#/$defs/nullableNumber"},
+        "abs_tvalue": {"$ref": "#/$defs/nullableNumber"}
+      }
+    },
+    "ssqtlGenotypeGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_count", "empty"],
+      "properties": {
+        "selected_count": {"type": "integer", "minimum": 0},
+        "empty": {"type": "boolean"}
+      }
+    },
+    "ssqtlGenotypeGroups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["0/0", "0/1", "1/1"],
+      "properties": {
+        "0/0": {"$ref": "#/$defs/ssqtlGenotypeGroup"},
+        "0/1": {"$ref": "#/$defs/ssqtlGenotypeGroup"},
+        "1/1": {"$ref": "#/$defs/ssqtlGenotypeGroup"}
+      }
+    },
+    "ssqtlSelectedSample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "track_order", "sample_id", "genotype", "dosage", "ratio",
+        "selection_label", "bai_fresh"
+      ],
+      "properties": {
+        "track_order": {"type": "integer", "minimum": 1},
+        "sample_id": {"type": "string", "minLength": 1},
+        "genotype": {"enum": ["0/0", "0/1", "1/1"]},
+        "dosage": {"type": "integer", "minimum": 0, "maximum": 2},
+        "ratio": {"type": "number", "minimum": 0},
+        "selection_label": {
+          "enum": ["all", "min", "max", "median", "q1", "q3", "mean", "mean-nearest"]
+        },
+        "bai_fresh": {"type": ["boolean", "null"]}
+      }
+    },
+    "ssqtlMatchKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ag_site", "snp"],
+      "properties": {
+        "ag_site": {"type": "string", "minLength": 1},
+        "snp": {"type": "string", "minLength": 1}
+      }
+    },
+    "ssqtlPresentViolin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "match_key", "page", "pdf_sha256"],
+      "properties": {
+        "state": {"const": "PRESENT"},
+        "match_key": {"$ref": "#/$defs/ssqtlMatchKey"},
+        "page": {"type": "integer", "minimum": 1},
+        "pdf_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ssqtlUnavailableViolin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "match_key", "page", "pdf_sha256"],
+      "properties": {
+        "state": {"const": "UNAVAILABLE"},
+        "match_key": {"$ref": "#/$defs/ssqtlMatchKey"},
+        "page": {"type": "null"},
+        "pdf_sha256": {"type": "null"}
+      }
+    },
+    "ssqtlAvailableReferenceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available", "chrom", "start", "end", "strand", "genomic_sequence",
+        "transcript_sequence", "expected_transcript_sequence", "canonical_ag"
+      ],
+      "properties": {
+        "available": {"const": true},
+        "chrom": {"type": "string", "pattern": "^chr[A-Za-z0-9_.-]+$"},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1},
+        "strand": {"enum": ["+", "-"]},
+        "genomic_sequence": {"type": "string", "pattern": "^[ACGTN]+$"},
+        "transcript_sequence": {"type": "string", "pattern": "^[ACGTN]+$"},
+        "expected_transcript_sequence": {"const": "AG"},
+        "canonical_ag": {"type": "boolean"}
+      }
+    },
+    "ssqtlUnavailableReferenceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "chrom", "start", "end", "strand", "error"],
+      "properties": {
+        "available": {"const": false},
+        "chrom": {"type": "string", "pattern": "^chr[A-Za-z0-9_.-]+$"},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1},
+        "strand": {"enum": ["+", "-"]},
+        "error": {"type": "string", "minLength": 1}
+      }
+    },
+    "ssqtlRenderContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "screen_width", "screen_height", "screen_depth", "violin_panel_width",
+        "igv_version", "overview_padding", "detail_padding", "policy_fingerprint"
+      ],
+      "properties": {
+        "screen_width": {"type": "integer", "minimum": 1},
+        "screen_height": {"type": "integer", "minimum": 1},
+        "screen_depth": {"type": "integer", "minimum": 1},
+        "violin_panel_width": {"type": "integer", "minimum": 1},
+        "igv_version": {"type": "string", "minLength": 1},
+        "overview_padding": {"type": "integer", "minimum": 0},
+        "detail_padding": {"type": "integer", "minimum": 0},
+        "policy_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ssqtlRdsEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared_path", "source_path", "identity"],
+      "properties": {
+        "declared_path": {"$ref": "#/$defs/relativePath"},
+        "source_path": {"$ref": "#/$defs/absolutePath"},
+        "identity": {"$ref": "#/$defs/fileIdentity"}
+      }
+    },
+    "ssqtlPreparationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "association_declared_path", "association_sha256", "bam_lookup_declared_path",
+        "bam_lookup_sha256", "adapter_config_sha256", "r_wrapper_sha256",
+        "r_implementation_sha256", "prepared_cases_sha256", "prepared_samples_sha256", "rds"
+      ],
+      "properties": {
+        "association_declared_path": {"$ref": "#/$defs/relativePath"},
+        "association_sha256": {"$ref": "#/$defs/sha256"},
+        "bam_lookup_declared_path": {"$ref": "#/$defs/relativePath"},
+        "bam_lookup_sha256": {"$ref": "#/$defs/sha256"},
+        "adapter_config_sha256": {"$ref": "#/$defs/sha256"},
+        "r_wrapper_sha256": {"$ref": "#/$defs/sha256"},
+        "r_implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "prepared_cases_sha256": {"$ref": "#/$defs/sha256"},
+        "prepared_samples_sha256": {"$ref": "#/$defs/sha256"},
+        "rds": {"$ref": "#/$defs/ssqtlRdsEvidence"}
+      }
+    },
+    "ssqtlPreparedTaskForbidden": {
+      "not": {
+        "type": "object",
+        "required": ["schema_version", "pipeline_version", "input_fingerprint"]
+      }
+    }
+  }
+}

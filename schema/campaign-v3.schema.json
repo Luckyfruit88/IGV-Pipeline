@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/campaign-v3.schema.json",
+  "title": "IGV Pipeline scientific campaign contract 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "created_at", "adapter_id",
+    "pilot_policy_id", "master_task_count", "master_tasks_relative_path",
+    "master_tasks_sha256", "master_task_set_sha256",
+    "pilot_selection_relative_path", "pilot_task_count",
+    "followup_batch_limit", "ledger_relative_path", "contract_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0-scientific-campaign"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "adapter_id": {"const": "ssqtl"},
+    "pilot_policy_id": {"const": "scc-pilot100-v1"},
+    "master_task_count": {"const": 8973},
+    "master_tasks_relative_path": {"const": "contract/master_tasks.jsonl"},
+    "master_tasks_sha256": {"$ref": "#/$defs/sha256"},
+    "master_task_set_sha256": {"$ref": "#/$defs/sha256"},
+    "pilot_selection_relative_path": {"const": "contract/pilot_selection.json"},
+    "pilot_task_count": {"const": 100},
+    "followup_batch_limit": {"const": 256},
+    "ledger_relative_path": {"const": "ledger/campaign-ledger.jsonl"},
+    "contract_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

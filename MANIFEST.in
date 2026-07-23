@@ -1,0 +1,25 @@
+include LICENSE
+include README.md
+include README.zh-CN.md
+include pyproject.toml
+include requirements.lock
+include requirements-build.lock
+include uv.lock
+include .dockerignore
+include main.nf
+include nextflow.config
+include nextflow_schema.json
+recursive-include bin *.py *.R
+recursive-include conf *.config
+recursive-include config *.yaml *.json
+recursive-include containers *.conf *.def *.dockerignore *.json *.lock *.sh *.Dockerfile
+recursive-include containers/bin *
+recursive-include docs *.md
+prune docs/migration
+recursive-include modules *.nf
+recursive-include schema *.json
+recursive-include scripts *.py *.sh
+recursive-include tests *.py
+recursive-include src/ssqtl_igv/resources *.R *.yaml
+recursive-include workflows *.nf
+global-exclude __pycache__ *.py[cod]

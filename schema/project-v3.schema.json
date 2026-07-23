@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/project-v3.schema.json",
+  "title": "IGV Pipeline pull-and-run project 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "adapter", "inputs", "reference"],
+  "properties": {
+    "schema_version": {"const": "3.0"},
+    "adapter": {"enum": ["generic", "ssqtl"]},
+    "reference": {"$ref": "#/$defs/relativePath"},
+    "inputs": {"type": "object"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "adapter": {"const": "generic"},
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cases"],
+          "properties": {"cases": {"$ref": "#/$defs/relativePath"}}
+        }
+      }
+    },
+    {
+      "properties": {
+        "adapter": {"const": "ssqtl"},
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["associations", "rds_dir", "bam_lookup", "violin_dir"],
+          "properties": {
+            "associations": {"$ref": "#/$defs/relativePath"},
+            "rds_dir": {"$ref": "#/$defs/relativePath"},
+            "bam_lookup": {"$ref": "#/$defs/relativePath"},
+            "violin_dir": {"$ref": "#/$defs/relativePath"},
+            "config": {"$ref": "#/$defs/relativePath"}
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^(?!/)(?![A-Za-z][A-Za-z0-9+.-]*:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*://)(?!.*[*?\\[\\]{}]).+$"
+    }
+  }
+}

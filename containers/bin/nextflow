@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly controller_java_home=/opt/java-21
+readonly nextflow_jar=/opt/nextflow/nextflow-25.04.7-one.jar
+readonly nextflow_launcher=/opt/nextflow/nextflow-25.04.7-launcher
+
+test -x "${controller_java_home}/bin/java"
+test -r "${nextflow_jar}"
+test -x "${nextflow_launcher}"
+
+export NXF_JAVA_HOME="${controller_java_home}"
+export NXF_BIN="${nextflow_jar}"
+export NXF_VER=25.04.7
+export NXF_OFFLINE="${NXF_OFFLINE:-true}"
+
+if [[ "${IGV_NEXTFLOW_LAUNCHER_TRACE:-false}" == true ]]; then
+    exec bash -x "${nextflow_launcher}" "$@"
+fi
+exec "${nextflow_launcher}" "$@"

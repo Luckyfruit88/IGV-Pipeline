@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+igv_root=/opt/igv
+igv_java_home="${IGV_JAVA_HOME:-${igv_root}/jdk-11}"
+igv_java="${igv_java_home}/bin/java"
+
+usage() {
+    printf '%s\n' \
+        'IGV Desktop 2.16.2 runtime wrapper' \
+        'The production workflow supplies --igvDirectory, local genome resources, and --batch.'
+}
+
+case "${1:-}" in
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    --runtime-self-test)
+        test -x "${igv_java}"
+        test -f "${igv_root}/lib/igv.jar"
+        test -f "${igv_root}/igv.args"
+        "${igv_java}" -version 2>&1 | grep -Eq 'version "11\.'
+        printf '%s\n' 'IGV_RUNTIME_OK version=2.16.2 java=11 heap=6g'
+        exit 0
+        ;;
+esac
+
+export JAVA_HOME="${igv_java_home}"
+export PATH="${igv_java_home}/bin:${PATH}"
+export LD_LIBRARY_PATH="/opt/igv-helper/lib:${igv_java_home}/lib:${igv_java_home}/lib/server${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+exec "${igv_java}" \
+    -showversion \
+    --module-path="${igv_root}/lib" \
+    -Xmx6g \
+    @"${igv_root}/igv.args" \
+    -Dapple.laf.useScreenMenuBar=true \
+    -Djava.net.preferIPv4Stack=true \
+    -Djava.net.useSystemProxies=false \
+    --module=org.igv/org.broad.igv.ui.Main \
+    "$@"

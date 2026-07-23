@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/nextflow_schema.json",
+  "title": "IGV snapshot workflow 3.0 parameters",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "generation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "params_file": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Full source workflow configuration used by PLAN_RUN and every case render; this is not the audit-only normalization_bundle/parameters.json output."
+    },
+    "associations": {"type": "string", "format": "file-path"},
+    "rds_dir": {"type": "string", "format": "directory-path"},
+    "bam_lookup": {"type": "string", "format": "file-path"},
+    "violin_dir": {"type": "string", "format": "directory-path"},
+    "genome_definition": {"type": "string", "format": "file-path"},
+    "fasta": {"type": "string", "format": "file-path"},
+    "fai": {"type": "string", "format": "file-path"},
+    "cytoband": {"type": "string", "format": "file-path"},
+    "annotation": {"type": "string", "format": "file-path"},
+    "prepared_cases": {"type": ["string", "null"], "format": "file-path"},
+    "prepared_samples": {"type": ["string", "null"], "format": "file-path"},
+    "expected_case_count": {"type": ["integer", "null"], "minimum": 1},
+    "estimated_seconds_per_case": {"type": "number", "exclusiveMinimum": 0, "default": 90},
+    "max_cases_per_shard": {"type": "integer", "minimum": 1, "maximum": 256, "default": 256},
+    "max_parallel": {"type": "integer", "minimum": 1, "maximum": 8, "default": 1},
+    "shard_score_budget": {"type": "number", "exclusiveMinimum": 0, "default": 23040},
+    "plan_output": {"type": "string", "format": "directory-path"},
+    "shard_manifest": {"type": "string", "format": "file-path"},
+    "shard_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "session_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "run_output": {"type": "string", "format": "directory-path"},
+    "attempt": {"type": "integer", "minimum": 1, "default": 1},
+    "pipeline_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "canonical_tasks": {"type": "string", "format": "file-path"},
+    "shard_plan": {"type": "string", "format": "file-path"},
+    "shard_summaries": {"type": "string"},
+    "compose_bundles": {"type": "string"},
+    "qc_bundles": {"type": "string"},
+    "trace_files": {"type": ["string", "null"]},
+    "controller_records": {"type": ["string", "null"]},
+    "aggregate_output": {"type": "string", "format": "directory-path"},
+    "review_output": {"type": "string", "format": "directory-path"},
+    "review_package": {"type": "string", "format": "directory-path"},
+    "review_records": {"type": "string", "format": "file-path"},
+    "aggregate_case_results": {"type": "string", "format": "file-path"},
+    "publication_destination": {"type": "string", "format": "directory-path"},
+    "validated_review_output": {"type": "string", "format": "directory-path"},
+    "helper_sif": {"type": ["string", "null"], "format": "file-path"},
+    "helper_sif_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "require_helper_sif": {"type": "boolean", "default": false},
+    "runtime_image": {
+      "type": ["string", "null"],
+      "pattern": "^ghcr\\.io/luckyfruit88/igv-pipeline@sha256:[a-f0-9]{64}$",
+      "description": "Optional advanced host-controller worker image; never a pull-and-run user parameter."
+    },
+    "observed_oci_digest": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "Automatically observed OCI provenance when available."
+    },
+    "runtime_manifest": {
+      "type": ["string", "null"],
+      "format": "file-path",
+      "description": "Embedded unsigned manifest conforming to containers/runtime-manifest.schema.json."
+    },
+    "runtime_manifest_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Automatically computed SHA-256 of the embedded runtime manifest."
+    },
+    "runtime_fingerprint_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Frozen cache identity derived from the embedded runtime manifest."
+    },
+    "runtime_sif": {
+      "type": ["string", "null"],
+      "format": "file-path",
+      "description": "Optional locally converted read-only SIF for the advanced host-controller profile."
+    },
+    "runtime_sif_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Lowercase SHA-256 of runtime_sif."
+    },
+    "runtime_execution_mode": {
+      "type": "string",
+      "enum": ["unconfigured", "standalone", "docker", "scc", "test"],
+      "default": "unconfigured"
+    },
+    "host_uid": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 2147483647,
+      "description": "Invoking host non-root UID used by advanced Docker-profile workers."
+    },
+    "host_gid": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 2147483647,
+      "description": "Invoking host non-root GID used by advanced Docker-profile workers."
+    },
+    "scc_project": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+      "description": "Required SGE project for the SCC profile; submitted with -P and reused as the qacct expectation."
+    },
+    "scc_qname": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+      "description": "Optional exact SGE queue for the SCC profile; submitted with -q and reused as the qacct expectation."
+    },
+    "python": {"type": "string", "default": "python3"},
+    "schema_dir": {"type": "string", "format": "directory-path"},
+    "r_prepare_wrapper": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Fixed R launcher staged as an explicit process input; it loads only the fixed sibling name prepare_cases_implementation.R."
+    },
+    "r_prepare_implementation": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Canonical cohort-preparation implementation staged independently so its content participates in the Nextflow task hash."
+    },
+    "enable_reports": {"type": "boolean", "default": false},
+    "fake_runtime": {"type": "boolean", "default": false},
+    "session_output": {"type": "string", "default": "session"},
+    "skip_qacct": {"type": "boolean", "default": false}
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["runtime_execution_mode"],
+        "properties": {"runtime_execution_mode": {"const": "scc"}}
+      },
+      "then": {
+        "required": ["scc_project"],
+        "properties": {
+          "scc_project": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["runtime_execution_mode"],
+        "properties": {"runtime_execution_mode": {"const": "docker"}}
+      },
+      "then": {
+        "required": ["host_uid", "host_gid"],
+        "properties": {
+          "host_uid": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+          "host_gid": {"type": "integer", "minimum": 1, "maximum": 2147483647}
+        }
+      },
+      "else": {
+        "properties": {
+          "host_uid": {"type": "null"},
+          "host_gid": {"type": "null"}
+        }
+      }
+    }
+  ]
+}

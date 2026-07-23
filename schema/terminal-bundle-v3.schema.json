@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/terminal-bundle-v3.schema.json",
+  "title": "IGV Snapshot Workflow portable terminal bundle 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "pipeline_version", "run_id", "generation_id", "task_id",
+    "manifest_order", "input_fingerprint", "status", "case_result_sha256",
+    "case_result_size", "artifact_set_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0"},
+    "pipeline_version": {"const": "3.0.0"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "generation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "task_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"},
+    "status": {"enum": ["SUCCEEDED", "DOMAIN_FAILED"]},
+    "case_result_sha256": {"$ref": "#/$defs/sha256"},
+    "case_result_size": {"type": "integer", "minimum": 1},
+    "artifact_set_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

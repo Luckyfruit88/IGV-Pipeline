@@ -1,0 +1,16 @@
+# Exact top-level RPM requests for the AlmaLinux 8.10 build transaction.
+# The build records the fully resolved RPM inventory inside the image. The
+# immutable OCI manifest digest and generated SBOM describe the final release
+# artifact; this request list alone is not the complete material inventory.
+xorg-x11-server-Xvfb
+xorg-x11-xauth
+xorg-x11-utils
+fontconfig
+dejavu-sans-fonts
+glibc-langpack-en
+unzip
+gzip
+tar
+procps-ng
+findutils
+which

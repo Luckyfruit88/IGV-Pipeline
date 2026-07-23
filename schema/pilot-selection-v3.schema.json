@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/pilot-selection-v3.schema.json",
+  "title": "BU SCC deterministic 100-case pilot selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "policy_id", "created_at",
+    "master_task_count", "master_tasks_sha256", "master_task_set_sha256",
+    "stratum_count", "strata", "selected_task_count", "selection",
+    "selection_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0-pilot-selection"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "policy_id": {"const": "scc-pilot100-v1"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "master_task_count": {"const": 8973},
+    "master_tasks_sha256": {"$ref": "#/$defs/sha256"},
+    "master_task_set_sha256": {"$ref": "#/$defs/sha256"},
+    "stratum_count": {"const": 46},
+    "strata": {
+      "type": "array", "minItems": 46, "maxItems": 46, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^chr(?:[1-9]|1[0-9]|2[0-2]|X)\\|[+-]$"}
+    },
+    "selected_task_count": {"const": 100},
+    "selection": {
+      "type": "array", "minItems": 100, "maxItems": 100,
+      "items": {"$ref": "#/$defs/selectionRow"}
+    },
+    "selection_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "safeTaskId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "selectionRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id", "stratum", "track_count", "track_input_bytes",
+        "overview_span_bp", "reason", "input_fingerprint"
+      ],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/safeTaskId"},
+        "stratum": {"type": "string", "pattern": "^chr(?:[1-9]|1[0-9]|2[0-2]|X)\\|[+-]$"},
+        "track_count": {"type": "integer", "minimum": 0},
+        "track_input_bytes": {"type": "integer", "minimum": 0},
+        "overview_span_bp": {"type": "integer", "minimum": 1},
+        "reason": {"enum": ["STRATUM_MIN", "STRATUM_MAX", "HASH_COMPLETION"]},
+        "input_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

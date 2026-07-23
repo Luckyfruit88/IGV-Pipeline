@@ -1,0 +1,109 @@
+name: contract-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Install Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked runtime and test dependencies
+        run: |
+          python -m pip install --requirement requirements.lock
+          python -m pip install --requirement requirements-build.lock pytest==8.4.2
+          python -m pip install --no-deps --no-build-isolation --editable .
+
+      - name: Run the existing contract suite
+        run: python -m pytest -q
+
+      - name: Install Java 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Verify and run Nextflow 25.04.7 lint
+        env:
+          NEXTFLOW_JAR_SHA256: 231a3c0fc7bae88add57ab420e9c6306ee35ff87b6af356cd2d8aa56347472f3
+          NXF_HOME: ${{ runner.temp }}/nextflow-home
+        run: |
+          curl --fail --location --silent --show-error \
+            --output "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" \
+            https://www.nextflow.io/releases/v25.04.7/nextflow-25.04.7-one.jar
+          printf '%s  %s\n' "${NEXTFLOW_JAR_SHA256}" \
+            "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" | sha256sum --check --strict
+          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" lint .
+
+      - name: Reject malformed patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git diff-tree --check --root --no-commit-id -r HEAD
+          fi
+
+  runtime-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Resolve immutable source tree
+        id: source
+        shell: bash
+        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build the pull-and-run image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: containers/runtime.Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: igv-pipeline:ci
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+            SOURCE_TREE=${{ steps.source.outputs.tree }}
+
+      - name: Run the embedded runtime self-test
+        run: |
+          docker run --rm \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --network none \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --tmpfs /run/home:rw,nosuid,nodev,size=128m,uid=65532,gid=65532,mode=0700 \
+            --tmpfs /work:rw,nosuid,nodev,size=512m \
+            --entrypoint runtime-self-test \
+            igv-pipeline:ci

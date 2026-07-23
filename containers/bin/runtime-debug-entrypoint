@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+artifact_class="${IGV_SNAPSHOT_ARTIFACT_CLASS:-}"
+output_root="${DEBUG_OUTPUT_ROOT:-}"
+
+[[ "${artifact_class}" == "DEBUG_ONLY" ]] || {
+    echo "runtime-debug requires IGV_SNAPSHOT_ARTIFACT_CLASS=DEBUG_ONLY" >&2
+    exit 2
+}
+[[ "${output_root}" == "/run/debug-only" ]] || {
+    echo "runtime-debug output must remain /run/debug-only" >&2
+    exit 2
+}
+
+for command_name in Xvfb igv x11vnc novnc_proxy websockify debug-screenshot; do
+    command -v "${command_name}" >/dev/null 2>&1 || {
+        echo "locked runtime-debug command is unavailable: ${command_name}" >&2
+        exit 2
+    }
+done
+
+if [[ "${1:-}" == "--self-test" ]]; then
+    [[ $# -eq 1 ]] || {
+        echo "runtime-debug --self-test accepts no additional arguments" >&2
+        exit 2
+    }
+    /opt/igv/bin/igv --runtime-self-test
+    printf '%s\n' 'RUNTIME_DEBUG_SELF_TEST=PASS'
+    printf '%s\n' 'ARTIFACT_CLASS=DEBUG_ONLY'
+    printf '%s\n' 'REVIEW_ELIGIBLE=false'
+    printf '%s\n' 'PUBLICATION_ELIGIBLE=false'
+    exit 0
+fi
+
+[[ $# -eq 0 ]] || {
+    echo "runtime-debug does not dispatch production workflow commands" >&2
+    exit 2
+}
+[[ -d "${output_root}" && ! -L "${output_root}" && -w "${output_root}" ]] || {
+    echo "runtime-debug requires a writable, non-symlink /run/debug-only mount" >&2
+    exit 2
+}
+
+marker="${output_root}/DEBUG_ONLY.json"
+[[ ! -e "${marker}" && ! -L "${marker}" ]] || {
+    echo "refusing to reuse a debug output generation: ${marker}" >&2
+    exit 2
+}
+umask 077
+printf '%s\n' \
+    '{' \
+    '  "schema_version": "igv-runtime-debug-session-v1",' \
+    '  "artifact_class": "DEBUG_ONLY",' \
+    '  "review_eligible": false,' \
+    '  "publication_eligible": false' \
+    '}' > "${marker}"
+chmod 0444 "${marker}"
+
+xvfb_pid=""
+igv_pid=""
+vnc_pid=""
+novnc_pid=""
+cleanup() {
+    status=$?
+    [[ -z "${novnc_pid}" ]] || kill "${novnc_pid}" >/dev/null 2>&1 || true
+    [[ -z "${vnc_pid}" ]] || kill "${vnc_pid}" >/dev/null 2>&1 || true
+    [[ -z "${igv_pid}" ]] || kill "${igv_pid}" >/dev/null 2>&1 || true
+    [[ -z "${xvfb_pid}" ]] || kill "${xvfb_pid}" >/dev/null 2>&1 || true
+    exit "${status}"
+}
+trap cleanup EXIT INT TERM
+
+Xvfb :99 -screen 0 1920x2160x24 -nolisten tcp -noreset &
+xvfb_pid=$!
+display_ready=false
+for _ in {1..50}; do
+    if xdpyinfo -display :99 >/dev/null 2>&1; then
+        display_ready=true
+        break
+    fi
+    sleep 0.1
+done
+[[ "${display_ready}" == true ]] || {
+    echo "Xvfb did not become ready" >&2
+    exit 2
+}
+igv_directory=/run/home/igv-debug
+mkdir -p "${igv_directory}"
+[[ -d "${igv_directory}" && ! -L "${igv_directory}" && -w "${igv_directory}" ]] || {
+    echo "runtime-debug requires a writable /run/home/igv-debug directory" >&2
+    exit 2
+}
+/opt/igv/bin/igv \
+    --igvDirectory "${igv_directory}" \
+    --port 60151 &
+igv_pid=$!
+sleep 0.5
+kill -0 "${igv_pid}" >/dev/null 2>&1 || {
+    echo "IGV Desktop exited during runtime-debug startup" >&2
+    exit 2
+}
+x11vnc \
+    -display :99 \
+    -rfbport 5900 \
+    -localhost \
+    -forever \
+    -shared \
+    -nopw \
+    -quiet &
+vnc_pid=$!
+
+# noVNC listens on the container interface so Docker can forward it. The only
+# permitted host exposure is enforced by scripts/run-runtime-debug.sh as
+# 127.0.0.1:<host-port>:6080 on an internal Docker network.
+novnc_proxy --listen 0.0.0.0:6080 --vnc 127.0.0.1:5900 &
+novnc_pid=$!
+wait "${novnc_pid}"

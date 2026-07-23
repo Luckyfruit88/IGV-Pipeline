@@ -1,0 +1,6 @@
+{
+  "project": "YOUR_SCC_PROJECT",
+  "qname": null,
+  "pe": "omp",
+  "engine": "apptainer"
+}

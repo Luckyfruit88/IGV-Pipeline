@@ -1,0 +1,63 @@
+schema_version: "3.0"
+runtime_manifest_contract:
+  platform: linux/amd64
+  oci_repository: ghcr.io/luckyfruit88/igv-pipeline
+  igv_heap: 6g
+  locale: C.UTF-8
+  font_family: DejaVu Sans
+  command_listener_enabled: false
+binaries:
+  igv: /opt/igv/bin/igv
+  xvfb: Xvfb
+  xwininfo: xwininfo
+  xprop: xprop
+  import: import
+  pdftoppm: pdftoppm
+  tesseract: tesseract
+  samtools: samtools
+render:
+  max_panel_height: 2160
+  overview_max_panel_height: 2160
+  sleep_interval_ms: 500
+  auxiliary_dpi: 180
+desktop:
+  screen_width: 1920
+  screen_height: 2160
+  screen_depth: 24
+  display_min: 90
+  display_max: 199
+  command_listener_enabled: false
+  window_title_regex: "\\bIGV\\b"
+  minimum_window_width: 1700
+  minimum_window_height: 1800
+  root_fallback_enabled: true
+  root_screenshot_publishable: false
+  gui_settle_delay_seconds: 5
+  toolbar_locus_roi: {x: 0, y: 0, width: 1920, height: 120}
+  toolbar_locus_stable_consecutive_frames: 3
+  toolbar_locus_stable_mean_absolute_fraction: 0.0
+  toolbar_locus_stable_changed_pixel_fraction: 0.0
+  locus_field_roi: {x: 467, y: 27, width: 226, height: 24}
+  locus_field_ocr_scale: 6
+  locus_field_ocr_psm: 13
+  locus_field_ocr_whitelist: "chrXxYy0123456789:,-"
+  locus_ocr_language: eng
+  stable_consecutive_frames: 3
+  retained_stability_frames: 4
+  stable_interval_seconds: 1
+  stable_mean_absolute_fraction: 0.0015
+  stable_changed_pixel_fraction: 0.01
+compose:
+  auxiliary_panel_width: 720
+qc:
+  min_stddev: 0.5
+timeouts:
+  igv_seconds: 1200
+  pdftoppm_seconds: 300
+  xvfb_start_seconds: 30
+  window_seconds: 180
+  batch_ready_seconds: 900
+  capture_seconds: 60
+  gui_settle_seconds: 120
+  locus_ocr_seconds: 60
+  pixel_stability_seconds: 180

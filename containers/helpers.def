@@ -1,0 +1,54 @@
+Bootstrap: docker
+From: almalinux@sha256:f043b7ac550015e1ed0b5a55a420c61d178bff4357ab9663fe0fbdcf1e6e2d86
+
+%labels
+    org.opencontainers.image.title IGV snapshot workflow helper runtime
+    org.opencontainers.image.version 2.0.0
+    org.opencontainers.image.source https://github.com/Luckyfruit88/IGV-Pipeline
+    org.opencontainers.image.base.digest sha256:f043b7ac550015e1ed0b5a55a420c61d178bff4357ab9663fe0fbdcf1e6e2d86
+
+%files
+    micromamba /usr/local/bin/micromamba
+    helper-linux-64.lock /opt/igv-container-locks/helper-linux-64.lock
+    samtools-linux-64.lock /opt/igv-container-locks/samtools-linux-64.lock
+    materials.lock.json /opt/igv-container-locks/materials.lock.json
+    build-provenance.json /opt/igv-container-locks/build-provenance.json
+    source /opt/igv-snapshot-workflow
+
+%post
+    set -eu
+    chmod 0755 /usr/local/bin/micromamba
+    export MAMBA_ROOT_PREFIX=/opt/micromamba-root
+    /usr/local/bin/micromamba create --yes \
+        --prefix /opt/igv-helper \
+        --file /opt/igv-container-locks/helper-linux-64.lock
+    /usr/local/bin/micromamba create --yes \
+        --prefix /opt/igv-samtools \
+        --file /opt/igv-container-locks/samtools-linux-64.lock
+    /opt/igv-helper/bin/python -m pip install \
+        --no-deps \
+        --no-build-isolation \
+        --no-cache-dir \
+        /opt/igv-snapshot-workflow
+    /usr/local/bin/micromamba clean --all --yes
+    rm -rf /opt/micromamba-root /root/.cache
+
+%environment
+    export PATH=/opt/igv-helper/bin:/opt/igv-samtools/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export TESSDATA_PREFIX=/opt/igv-helper/share/tessdata
+
+%test
+    set -eu
+    /opt/igv-helper/bin/python -c 'import importlib.metadata as m, sys; assert sys.version_info[:3] == (3, 10, 12); assert m.version("igv-snapshot-workflow") == "2.0.0"; assert m.version("Pillow") == "11.3.0"; assert m.version("PyYAML") == "6.0.2"; assert m.version("jsonschema") == "4.25.1"'
+    /opt/igv-helper/bin/Rscript -e 'stopifnot(as.character(getRversion()) == "4.5.2")'
+    /opt/igv-helper/bin/pdftotext -v 2>&1 | grep -F '26.07.0'
+    /opt/igv-helper/bin/magick -version | grep -F 'ImageMagick 7.1.2-27'
+    /opt/igv-helper/bin/tesseract --version | grep -F 'tesseract 5.5.2'
+    /opt/igv-helper/bin/tesseract --list-langs | grep -Fx 'eng'
+    /opt/igv-samtools/bin/samtools --version | grep -F 'samtools 1.18'
+    /opt/igv-samtools/bin/htsfile --version | grep -F 'htsfile (htslib) 1.18'
+    /opt/igv-helper/bin/igv-snapshot-workflow --help >/dev/null

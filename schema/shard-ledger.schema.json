@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/shard-ledger.schema.json",
+  "title": "Append-only shard control ledger event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "event_id", "sequence", "event_type", "occurred_at", "run_id",
+    "generation_id", "shard_id", "expected_task_count", "task_set_sha256",
+    "pipeline_commit", "schema_identity", "session_id", "controller_job_id", "payload"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "event_id": {"$ref": "#/$defs/safeIdLong"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "event_type": {
+      "enum": [
+        "PLANNED", "ADMITTED", "CONTROLLER_SUBMITTED", "CONTROLLER_RUNNING",
+        "COMPLETED", "FAILED", "RECOVERY_AUDITED", "RESUMED"
+      ]
+    },
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "run_id": {"$ref": "#/$defs/safeId"},
+    "generation_id": {"$ref": "#/$defs/safeId"},
+    "shard_id": {"$ref": "#/$defs/safeId"},
+    "expected_task_count": {"type": "integer", "minimum": 1},
+    "task_set_sha256": {"$ref": "#/$defs/sha256"},
+    "pipeline_commit": {"$ref": "#/$defs/gitCommit"},
+    "schema_identity": {"const": "2.0"},
+    "session_id": {
+      "oneOf": [
+        {"$ref": "#/$defs/safeIdLong"},
+        {"type": "null"}
+      ]
+    },
+    "controller_job_id": {"type": ["string", "null"], "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
+    "payload": {"type": "object"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "safeIdLong": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "gitCommit": {"type": "string", "pattern": "^[a-f0-9]{40}$"}
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": "igv-runtime-debug-materials-v1",
+  "platform": "linux/amd64",
+  "lock_state": "MISSING_MATERIALS",
+  "production_runtime": {
+    "required_reference_pattern": "^ghcr\\.io/luckyfruit88/igv-pipeline@sha256:[a-f0-9]{64}$"
+  },
+  "debug_tools_bundle": {
+    "path": "containers/debug-runtime-tools.tar.gz",
+    "sha256": null,
+    "required_commands": [
+      "/opt/debug-runtime/bin/novnc_proxy",
+      "/opt/debug-runtime/bin/websockify",
+      "/opt/debug-runtime/bin/x11vnc"
+    ]
+  },
+  "availability": {
+    "state": "MISSING_MATERIALS",
+    "reason": "The noVNC, websockify, and x11vnc offline bundle has not been resolved, checksum-locked, or vulnerability-scanned."
+  }
+}

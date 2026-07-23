@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/task.schema.json",
+  "title": "IGV canonical task schema 2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "pipeline_version",
+    "run_id",
+    "generation_id",
+    "task_id",
+    "manifest_order",
+    "association",
+    "figure_contract_id",
+    "gui_settle_contract_id",
+    "ag",
+    "snp",
+    "strand",
+    "regions",
+    "statistics",
+    "genotype_groups",
+    "tracks",
+    "plot",
+    "reference",
+    "reference_context",
+    "render_contract",
+    "preflight_state",
+    "preflight_warnings",
+    "preflight_errors",
+    "shard_hint",
+    "estimated_runtime_seconds",
+    "input_fingerprint"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "pipeline_version": {"const": "2.0.0"},
+    "run_id": {"$ref": "#/$defs/safeId"},
+    "generation_id": {"$ref": "#/$defs/safeId"},
+    "task_id": {"$ref": "#/$defs/safeIdLong"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "association": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row", "input_sha256"],
+      "properties": {
+        "row": {"type": "integer", "minimum": 1},
+        "input_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "figure_contract_id": {"type": "string", "minLength": 1},
+    "gui_settle_contract_id": {"type": "string", "minLength": 1},
+    "ag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "chrom", "source_start", "source_end", "start", "end"],
+      "properties": {
+        "raw": {"type": "string", "minLength": 1},
+        "chrom": {"$ref": "#/$defs/chrom"},
+        "source_start": {"type": "integer", "minimum": 1},
+        "source_end": {"type": "integer", "minimum": 1},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1}
+      }
+    },
+    "snp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "chrom", "position", "ref", "alt"],
+      "properties": {
+        "raw": {"type": "string", "minLength": 1},
+        "chrom": {"$ref": "#/$defs/chrom"},
+        "position": {"type": "integer", "minimum": 1},
+        "ref": {"type": "string", "pattern": "^[ACGTN]+$"},
+        "alt": {"type": "string", "pattern": "^[ACGTN]+$"}
+      }
+    },
+    "strand": {"enum": ["+", "-"]},
+    "regions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overview", "detail"],
+      "properties": {
+        "overview": {"$ref": "#/$defs/region"},
+        "detail": {"$ref": "#/$defs/region"}
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "n_total", "n_0", "n_1", "n_2",
+        "eligible_n_0", "eligible_n_1", "eligible_n_2", "beta", "abs_tvalue"
+      ],
+      "properties": {
+        "n_total": {"$ref": "#/$defs/nullableNumber"},
+        "n_0": {"$ref": "#/$defs/nullableNumber"},
+        "n_1": {"$ref": "#/$defs/nullableNumber"},
+        "n_2": {"$ref": "#/$defs/nullableNumber"},
+        "eligible_n_0": {"$ref": "#/$defs/nullableNumber"},
+        "eligible_n_1": {"$ref": "#/$defs/nullableNumber"},
+        "eligible_n_2": {"$ref": "#/$defs/nullableNumber"},
+        "beta": {"$ref": "#/$defs/nullableNumber"},
+        "abs_tvalue": {"$ref": "#/$defs/nullableNumber"}
+      }
+    },
+    "genotype_groups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["0/0", "0/1", "1/1"],
+      "properties": {
+        "0/0": {"$ref": "#/$defs/genotypeGroup"},
+        "0/1": {"$ref": "#/$defs/genotypeGroup"},
+        "1/1": {"$ref": "#/$defs/genotypeGroup"}
+      }
+    },
+    "tracks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/track"}
+    },
+    "plot": {
+      "oneOf": [
+        {"$ref": "#/$defs/presentPlot"},
+        {"$ref": "#/$defs/unavailablePlot"}
+      ]
+    },
+    "reference": {"$ref": "#/$defs/referenceBundle"},
+    "reference_context": {
+      "oneOf": [
+        {"$ref": "#/$defs/availableReferenceContext"},
+        {"$ref": "#/$defs/unavailableReferenceContext"}
+      ]
+    },
+    "render_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "screen_width", "screen_height", "screen_depth", "violin_panel_width",
+        "igv_version", "overview_padding", "detail_padding", "policy_fingerprint"
+      ],
+      "properties": {
+        "screen_width": {"type": "integer", "minimum": 1},
+        "screen_height": {"type": "integer", "minimum": 1},
+        "screen_depth": {"type": "integer", "minimum": 1},
+        "violin_panel_width": {"type": "integer", "minimum": 1},
+        "igv_version": {"type": "string", "minLength": 1},
+        "overview_padding": {"type": "integer", "minimum": 0},
+        "detail_padding": {"type": "integer", "minimum": 0},
+        "policy_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "preflight_state": {"enum": ["READY", "CASE_INPUT_INVALID"]},
+    "preflight_warnings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/issue"}
+    },
+    "preflight_errors": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/issue"}
+    },
+    "shard_hint": {"$ref": "#/$defs/safeId"},
+    "estimated_runtime_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"preflight_state": {"const": "READY"}}},
+      "then": {"properties": {"preflight_errors": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"preflight_state": {"const": "CASE_INPUT_INVALID"}}},
+      "then": {"properties": {"preflight_errors": {"minItems": 1}}}
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    },
+    "safeIdLong": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
+    },
+    "safeStageName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "chrom": {
+      "type": "string",
+      "pattern": "^chr[A-Za-z0-9_.-]+$"
+    },
+    "nullableNumber": {
+      "type": ["number", "null"]
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chrom", "start", "end"],
+      "properties": {
+        "chrom": {"$ref": "#/$defs/chrom"},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1}
+      }
+    },
+    "fileIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "mtime_ns"],
+      "properties": {
+        "size": {"type": "integer", "minimum": 0},
+        "mtime_ns": {"type": "integer", "minimum": 0},
+        "sha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_path", "stage_name", "identity"],
+      "properties": {
+        "source_path": {"$ref": "#/$defs/absolutePath"},
+        "stage_name": {"$ref": "#/$defs/safeStageName"},
+        "identity": {"$ref": "#/$defs/fileIdentity"}
+      }
+    },
+    "genotypeGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_count", "empty"],
+      "properties": {
+        "selected_count": {"type": "integer", "minimum": 0},
+        "empty": {"type": "boolean"}
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sample_id", "genotype", "dosage", "ratio", "selection_label",
+        "bam", "bai", "stage_bam", "stage_bai", "bam_identity", "bai_identity", "bai_fresh"
+      ],
+      "properties": {
+        "sample_id": {"type": "string", "minLength": 1},
+        "genotype": {"enum": ["0/0", "0/1", "1/1"]},
+        "dosage": {"type": "integer", "minimum": 0, "maximum": 2},
+        "ratio": {"type": "number", "minimum": 0},
+        "selection_label": {"enum": ["all", "min", "max", "median", "q1", "q3", "mean", "mean-nearest"]},
+        "bam": {"$ref": "#/$defs/absolutePath"},
+        "bai": {"$ref": "#/$defs/absolutePath"},
+        "stage_bam": {"$ref": "#/$defs/safeStageName"},
+        "stage_bai": {"$ref": "#/$defs/safeStageName"},
+        "bam_identity": {"$ref": "#/$defs/fileIdentity"},
+        "bai_identity": {"$ref": "#/$defs/fileIdentity"},
+        "bai_fresh": {"type": ["boolean", "null"]}
+      }
+    },
+    "presentPlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "pdf", "stage_pdf", "page", "match_key", "pdf_identity"],
+      "properties": {
+        "state": {"const": "PRESENT"},
+        "pdf": {"$ref": "#/$defs/absolutePath"},
+        "stage_pdf": {"$ref": "#/$defs/safeStageName"},
+        "page": {"type": "integer", "minimum": 1},
+        "match_key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ag_site", "snp"],
+          "properties": {
+            "ag_site": {"type": "string", "minLength": 1},
+            "snp": {"type": "string", "minLength": 1}
+          }
+        },
+        "pdf_identity": {"$ref": "#/$defs/fileIdentity"}
+      }
+    },
+    "unavailablePlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "pdf", "stage_pdf", "page", "match_key", "pdf_identity"],
+      "properties": {
+        "state": {"const": "UNAVAILABLE"},
+        "pdf": {
+          "oneOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"type": "null"}
+          ]
+        },
+        "stage_pdf": {"type": "null"},
+        "page": {"type": "null"},
+        "match_key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ag_site", "snp"],
+          "properties": {
+            "ag_site": {"type": "string", "minLength": 1},
+            "snp": {"type": "string", "minLength": 1}
+          }
+        },
+        "pdf_identity": {"type": "null"}
+      }
+    },
+    "referenceBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "display_name", "annotation_version", "resource_fingerprint", "resources"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "annotation_version": {"type": "string", "minLength": 1},
+        "resource_fingerprint": {"$ref": "#/$defs/sha256"},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["definition", "fasta", "fai", "cytoband", "annotation"],
+          "properties": {
+            "definition": {"$ref": "#/$defs/resource"},
+            "fasta": {"$ref": "#/$defs/resource"},
+            "fai": {"$ref": "#/$defs/resource"},
+            "cytoband": {"$ref": "#/$defs/resource"},
+            "annotation": {"$ref": "#/$defs/resource"}
+          }
+        }
+      }
+    },
+    "availableReferenceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available", "chrom", "start", "end", "strand", "genomic_sequence",
+        "transcript_sequence", "expected_transcript_sequence", "canonical_ag"
+      ],
+      "properties": {
+        "available": {"const": true},
+        "chrom": {"$ref": "#/$defs/chrom"},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1},
+        "strand": {"enum": ["+", "-"]},
+        "genomic_sequence": {"type": "string", "pattern": "^[ACGTN]+$"},
+        "transcript_sequence": {"type": "string", "pattern": "^[ACGTN]+$"},
+        "expected_transcript_sequence": {"const": "AG"},
+        "canonical_ag": {"type": "boolean"}
+      }
+    },
+    "unavailableReferenceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "chrom", "start", "end", "strand", "error"],
+      "properties": {
+        "available": {"const": false},
+        "chrom": {"$ref": "#/$defs/chrom"},
+        "start": {"type": "integer", "minimum": 1},
+        "end": {"type": "integer", "minimum": 1},
+        "strand": {"enum": ["+", "-"]},
+        "error": {"type": "string", "minLength": 1}
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}

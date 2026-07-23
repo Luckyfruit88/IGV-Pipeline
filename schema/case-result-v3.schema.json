@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/case-result-v3.schema.json",
+  "title": "IGV Snapshot Workflow portable case result 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "pipeline_version", "run_id", "generation_id", "task_id",
+    "manifest_order", "input_fingerprint", "adapter_type", "adapter_evidence", "eligible", "render_state",
+    "evidence_state", "artifact_review_state", "scientific_interpretation",
+    "publication_state", "debug_only", "required_manual_assertions", "artifacts",
+    "pixel_identity", "failures", "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0"},
+    "pipeline_version": {"const": "3.0.0"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generation_id": {"$ref": "#/$defs/id"},
+    "task_id": {"$ref": "#/$defs/longId"},
+    "manifest_order": {"type": "integer", "minimum": 1},
+    "input_fingerprint": {"$ref": "#/$defs/sha256"},
+    "adapter_type": {"enum": ["generic", "ssqtl"]},
+    "adapter_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_schema_version"],
+      "properties": {
+        "adapter_schema_version": {"enum": ["3.0-generic", "3.0-ssqtl"]},
+        "scientific_interpretation": {"const": "NOT_APPLICABLE"},
+        "scientific_evidence_available": {"type": "boolean"},
+        "scientific_case_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "scientific_qc_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "scientific_evidence_state": {
+          "enum": ["COMPLETE", "EVIDENCE_INCOMPLETE", "UNAVAILABLE"]
+        },
+        "scientific_result_interpretation": {
+          "enum": ["PENDING", "SUPPORTED", "NOT_SUPPORTED", "INDETERMINATE"]
+        },
+        "scientific_failure_set_sha256": {"$ref": "#/$defs/sha256"},
+        "empty_genotype_groups": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["0/0", "0/1", "1/1"]}
+        }
+      }
+    },
+    "eligible": {"type": "boolean"},
+    "render_state": {"enum": ["SUCCEEDED", "FAILED"]},
+    "evidence_state": {"enum": ["COMPLETE", "EVIDENCE_INCOMPLETE", "UNAVAILABLE"]},
+    "artifact_review_state": {"const": "REVIEW_PENDING"},
+    "scientific_interpretation": {
+      "enum": ["NOT_APPLICABLE", "PENDING", "SUPPORTED", "NOT_SUPPORTED", "INDETERMINATE"]
+    },
+    "publication_state": {"const": "NOT_READY"},
+    "debug_only": {"type": "boolean"},
+    "required_manual_assertions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 200}
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "review_image": {"$ref": "#/$defs/artifact"},
+        "scientific_qc": {"$ref": "#/$defs/artifact"},
+        "raw_igv": {"$ref": "#/$defs/artifact"},
+        "capture_metadata": {"$ref": "#/$defs/artifact"},
+        "layout": {"$ref": "#/$defs/artifact"},
+        "raw_qc": {"$ref": "#/$defs/artifact"},
+        "review_qc": {"$ref": "#/$defs/artifact"},
+        "track_display_contract": {"$ref": "#/$defs/artifact"},
+        "igv_session": {"$ref": "#/$defs/artifact"},
+        "scientific_case_evidence": {"$ref": "#/$defs/artifact"},
+        "scientific_qc_evidence": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "pixel_identity": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_igv_decoded_pixel_sha256", "final_igv_decoded_pixel_sha256",
+            "igv_pixel_identity"
+          ],
+          "properties": {
+            "source_igv_decoded_pixel_sha256": {"$ref": "#/$defs/sha256"},
+            "final_igv_decoded_pixel_sha256": {"$ref": "#/$defs/sha256"},
+            "igv_pixel_identity": {"const": true}
+          }
+        }
+      ]
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1, "maxLength": 200},
+          "message": {"type": "string", "minLength": 1, "maxLength": 10000}
+        }
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"eligible": {"const": true}}, "required": ["eligible"]},
+      "then": {
+        "properties": {
+          "render_state": {"const": "SUCCEEDED"},
+          "evidence_state": {"enum": ["COMPLETE", "EVIDENCE_INCOMPLETE"]},
+          "debug_only": {"const": false},
+          "failures": {"maxItems": 0},
+          "artifacts": {"required": ["review_image", "scientific_qc"]}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "adapter_type": {"const": "ssqtl"},
+          "render_state": {"const": "SUCCEEDED"}
+        },
+        "required": ["adapter_type", "render_state"]
+      },
+      "then": {
+        "properties": {
+          "pixel_identity": {"type": "object"},
+          "artifacts": {
+            "required": [
+              "review_image", "scientific_qc", "raw_igv", "capture_metadata",
+              "layout", "raw_qc", "review_qc", "scientific_case_evidence",
+              "scientific_qc_evidence"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "adapter_type": {"const": "generic"},
+          "render_state": {"const": "SUCCEEDED"}
+        },
+        "required": ["adapter_type", "render_state"]
+      },
+      "then": {
+        "properties": {
+          "scientific_interpretation": {"const": "NOT_APPLICABLE"},
+          "pixel_identity": {"type": "object"},
+          "artifacts": {
+            "required": [
+              "review_image", "scientific_qc", "raw_igv", "capture_metadata", "layout",
+              "raw_qc", "review_qc", "track_display_contract", "igv_session"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"render_state": {"const": "FAILED"}}, "required": ["render_state"]},
+      "then": {
+        "properties": {
+          "eligible": {"const": false},
+          "evidence_state": {"const": "UNAVAILABLE"},
+          "pixel_identity": {"type": "null"},
+          "failures": {"minItems": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "longId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "size"],
+      "properties": {
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

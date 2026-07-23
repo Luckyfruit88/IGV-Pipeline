@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/containers/runtime-manifest.schema.json",
+  "title": "IGV Pipeline embedded unsigned runtime manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow_schema_version",
+    "pipeline",
+    "platform",
+    "source",
+    "materials",
+    "render_contract",
+    "tools"
+  ],
+  "properties": {
+    "schema_version": {"const": "igv-runtime-manifest-v1"},
+    "workflow_schema_version": {"const": "3.0"},
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"const": "igv-pipeline"},
+        "version": {"const": "3.0.0"}
+      }
+    },
+    "platform": {"const": "linux/amd64"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "tree": {"type": "string", "pattern": "^[a-f0-9]{40}$"}
+      }
+    },
+    "materials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"const": "containers/runtime-materials.lock.json"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "render_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "screen",
+        "igv_heap",
+        "locale",
+        "font_family",
+        "command_listener_enabled",
+        "config_path",
+        "config_sha256"
+      ],
+      "properties": {
+        "screen": {"const": "1920x2160x24"},
+        "igv_heap": {"const": "6g"},
+        "locale": {"const": "C.UTF-8"},
+        "font_family": {"const": "DejaVu Sans"},
+        "command_listener_enabled": {"const": false},
+        "config_path": {"const": "src/ssqtl_igv/resources/v3-runtime.yaml"},
+        "config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "igv",
+        "igv_jre",
+        "nextflow",
+        "controller_java",
+        "python",
+        "r",
+        "samtools",
+        "poppler",
+        "imagemagick",
+        "fontconfig",
+        "fonts",
+        "tesseract",
+        "xvfb"
+      ],
+      "properties": {
+        "igv": {"$ref": "#/$defs/version"},
+        "igv_jre": {"$ref": "#/$defs/version"},
+        "nextflow": {"$ref": "#/$defs/version"},
+        "controller_java": {"$ref": "#/$defs/version"},
+        "python": {"$ref": "#/$defs/version"},
+        "r": {"$ref": "#/$defs/version"},
+        "samtools": {"$ref": "#/$defs/version"},
+        "poppler": {"$ref": "#/$defs/version"},
+        "imagemagick": {"$ref": "#/$defs/version"},
+        "fontconfig": {"$ref": "#/$defs/version"},
+        "fonts": {"const": "DejaVu Sans"},
+        "tesseract": {"$ref": "#/$defs/version"},
+        "xvfb": {"$ref": "#/$defs/version"}
+      }
+    }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^\\S(?:.*\\S)?$"
+    }
+  }
+}

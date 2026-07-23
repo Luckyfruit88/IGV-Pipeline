@@ -1,0 +1,25 @@
+.git
+.gitignore
+.DS_Store
+.nextflow
+.nextflow-home
+.nextflow.log*
+.pytest_cache
+.tools
+.venv
+build
+dist
+work
+session
+*.bam
+*.bai
+*.cram
+*.crai
+*.rds
+*.RDS
+*.sif
+*.log
+
+# Unlike the root production .dockerignore, this Dockerfile-specific context
+# admits containers/debug-runtime-tools.tar.gz after the builder has verified
+# its locked SHA-256. Docker gives this file precedence for runtime-debug only.

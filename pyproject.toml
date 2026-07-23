@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools==75.1.0", "wheel==0.44.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "igv-snapshot-workflow"
+version = "3.0.0"
+description = "Pull-and-run Nextflow and IGV Desktop snapshot pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "jsonschema==4.25.1",
+  "Pillow==11.3.0",
+  "PyYAML==6.0.2",
+]
+
+[project.scripts]
+igv-snapshot = "ssqtl_igv.v3_cli:main"
+igv-snapshot-workflow = "ssqtl_igv.v3_cli:main"
+ssqtl-igv = "ssqtl_igv.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+license-files = ["LICENSE"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ssqtl_igv = ["resources/*.R", "resources/*.yaml"]
+
+[tool.setuptools.data-files]
+"share/igv-snapshot-workflow/schema" = ["schema/*.json"]
+"share/igv-snapshot-workflow/pipeline" = [
+  "LICENSE",
+  "MANIFEST.in",
+  "README.md",
+  "README.zh-CN.md",
+  "main.nf",
+  "nextflow.config",
+  "nextflow_schema.json",
+  "pyproject.toml",
+  "requirements-build.lock",
+  "requirements.lock",
+  "uv.lock",
+]
+"share/igv-snapshot-workflow/pipeline/bin" = ["bin/*.py", "bin/*.R"]
+"share/igv-snapshot-workflow/pipeline/conf" = ["conf/*.config"]
+"share/igv-snapshot-workflow/pipeline/config" = ["config/*.yaml", "config/*.json"]
+"share/igv-snapshot-workflow/pipeline/containers" = [
+  "containers/*.def",
+  "containers/*.dockerignore",
+  "containers/*.json",
+  "containers/*.lock",
+  "containers/*.conf",
+  "containers/*.sh",
+  "containers/*.Dockerfile",
+]
+"share/igv-snapshot-workflow/pipeline/containers/bin" = ["containers/bin/*"]
+"share/igv-snapshot-workflow/pipeline/docs" = ["docs/*.md"]
+"share/igv-snapshot-workflow/pipeline/docs/architecture" = [
+  "docs/architecture/*.md",
+]
+"share/igv-snapshot-workflow/pipeline/docs/contracts" = [
+  "docs/contracts/*.md",
+]
+"share/igv-snapshot-workflow/pipeline/docs/runtime" = [
+  "docs/runtime/*.md",
+]
+"share/igv-snapshot-workflow/pipeline/modules/local" = ["modules/local/*.nf"]
+"share/igv-snapshot-workflow/pipeline/schema" = ["schema/*.json"]
+"share/igv-snapshot-workflow/pipeline/scripts" = ["scripts/*.py", "scripts/*.sh"]
+"share/igv-snapshot-workflow/pipeline/src/ssqtl_igv" = ["src/ssqtl_igv/*.py"]
+"share/igv-snapshot-workflow/pipeline/src/ssqtl_igv/resources" = [
+  "src/ssqtl_igv/resources/*.py",
+  "src/ssqtl_igv/resources/*.R",
+  "src/ssqtl_igv/resources/*.yaml",
+]
+"share/igv-snapshot-workflow/pipeline/workflows" = ["workflows/*.nf"]

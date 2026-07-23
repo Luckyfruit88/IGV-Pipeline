@@ -1,0 +1,52 @@
+{
+  "schema_version": "igv-helper-lock-spec-v1",
+  "platform": "linux-64",
+  "virtual_packages": {
+    "__glibc": "2.28"
+  },
+  "base_image": {
+    "registry": "docker.io",
+    "repository": "library/almalinux",
+    "source_tag": "8.10-20260602",
+    "oci_index_sha256": "4a87d2615a770506e204c27d6248ac97f4df67f4e41e2e9c47c81f0ed0be98cb",
+    "linux_amd64_manifest_sha256": "f043b7ac550015e1ed0b5a55a420c61d178bff4357ab9663fe0fbdcf1e6e2d86",
+    "config_sha256": "c1e2767a049bdbce3bb0a295604adf639117893bb9af8cf422c88bf413d79c79",
+    "layers": [
+      {
+        "sha256": "a0ca16fa6f59daa991d1f4bac1474eee6feecd5a9d67c587c38ec0b4bd0f853f",
+        "size": 72732747
+      }
+    ]
+  },
+  "micromamba": {
+    "release": "2.6.2-1",
+    "linux_64_url": "https://github.com/mamba-org/micromamba-releases/releases/download/2.6.2-1/micromamba-linux-64",
+    "linux_64_sha256": "e9683b483df06dbd3fdd8a37f1b6826d7e5caf4e85bf15a0af4fbad3d4ad1a58"
+  },
+  "environments": {
+    "helper": {
+      "prefix": "/opt/igv-helper",
+      "lockfile": "helper-linux-64.lock",
+      "channels": ["conda-forge"],
+      "specs": [
+        "python=3.10.12",
+        "r-base=4.5.2",
+        "pillow=11.3.0",
+        "pyyaml=6.0.2",
+        "jsonschema=4.25.1",
+        "poppler=26.07.0",
+        "imagemagick=7.1.2_27",
+        "tesseract=5.5.2",
+        "pip=26.1.2",
+        "setuptools=75.1.0",
+        "wheel=0.44.0"
+      ]
+    },
+    "samtools": {
+      "prefix": "/opt/igv-samtools",
+      "lockfile": "samtools-linux-64.lock",
+      "channels": ["conda-forge", "bioconda"],
+      "specs": ["samtools=1.18", "htslib=1.18"]
+    }
+  }
+}

@@ -1,0 +1,43 @@
+# Default-deny build context. Only files explicitly required by the packaged
+# controller/runtime are admitted; tests, run outputs, credentials, and local
+# evidence cannot enter an OCI layer through a broad COPY.
+**
+!.dockerignore
+!LICENSE
+!MANIFEST.in
+!README.md
+!README.zh-CN.md
+!main.nf
+!nextflow.config
+!nextflow_schema.json
+!pyproject.toml
+!requirements-build.lock
+!requirements.lock
+!uv.lock
+!bin/
+!bin/**
+!conf/
+!conf/**
+!config/
+!config/**
+!containers/
+!containers/**
+!docs/
+!docs/**
+!modules/
+!modules/**
+!schema/
+!schema/**
+!scripts/
+!scripts/**
+!src/
+!src/**
+!workflows/
+!workflows/**
+
+# Explicitly deny development-only history even below an admitted directory.
+docs/migration/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+containers/debug-runtime-tools.tar.gz

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    echo "usage: debug-screenshot SAFE_BASENAME" >&2
+}
+
+[[ $# -eq 1 && "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+    usage
+    exit 2
+}
+[[ "${IGV_SNAPSHOT_ARTIFACT_CLASS:-}" == "DEBUG_ONLY" ]] || {
+    echo "debug-screenshot is available only in a DEBUG_ONLY runtime" >&2
+    exit 2
+}
+output_root="${DEBUG_OUTPUT_ROOT:-}"
+[[ "${output_root}" == "/run/debug-only" && -d "${output_root}" && ! -L "${output_root}" ]] || {
+    echo "debug screenshot output must remain in /run/debug-only" >&2
+    exit 2
+}
+
+for command_name in import convert sha256sum; do
+    command -v "${command_name}" >/dev/null 2>&1 || {
+        echo "required screenshot command is unavailable: ${command_name}" >&2
+        exit 2
+    }
+done
+
+stem="${1%.png}"
+output="${output_root}/${stem}.DEBUG_ONLY.png"
+sidecar="${output}.DEBUG_ONLY.json"
+temporary="${output_root}/.${stem}.$$.png"
+[[ ! -e "${output}" && ! -L "${output}" && ! -e "${sidecar}" && ! -L "${sidecar}" ]] || {
+    echo "refusing to overwrite a debug screenshot or marker" >&2
+    exit 2
+}
+cleanup() {
+    status=$?
+    rm -f -- "${temporary}"
+    exit "${status}"
+}
+trap cleanup EXIT
+
+umask 077
+import -display "${DISPLAY:-:99}" -window root "${temporary}"
+convert "${temporary}" \
+    -gravity southeast \
+    -fill '#ffffff' \
+    -undercolor '#b00000cc' \
+    -pointsize 52 \
+    -annotate +24+24 'DEBUG_ONLY' \
+    -set comment 'DEBUG_ONLY - not eligible for review or publication' \
+    "${output}"
+checksum="$(sha256sum "${output}" | cut -d' ' -f1)"
+printf '%s\n' \
+    '{' \
+    '  "schema_version": "igv-runtime-debug-artifact-v1",' \
+    '  "artifact_class": "DEBUG_ONLY",' \
+    '  "review_eligible": false,' \
+    '  "publication_eligible": false,' \
+    "  \"basename\": \"$(basename "${output}")\"," \
+    "  \"sha256\": \"${checksum}\"" \
+    '}' > "${sidecar}"
+chmod 0444 "${output}" "${sidecar}"
+printf '%s\n' "${output}"

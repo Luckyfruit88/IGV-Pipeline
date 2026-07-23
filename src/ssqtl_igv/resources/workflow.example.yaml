@@ -1,0 +1,181 @@
+# Copy this file outside the installed package and replace every /path/to value.
+# Optional SHA-256 values and expected_case_count fail closed only when supplied.
+paths:
+  associations: /path/to/associations.csv
+  associations_sha256: null
+  rds_dir: /path/to/rds
+  bam_lookup: /path/to/bam_lookup.csv
+  violin_dir: /path/to/violin_pdfs
+  violin_pdf_template: "violin_plots_{strand_token}_{chrom}.pdf"
+  output_root: /path/to/workflow_runs
+  publish_root: /path/to/published_results
+
+workflow:
+  figure_contract_id: v031_native_igv_pixel_exact
+  gui_settle_contract_id: v031_toolbar_locus_settle_v1
+  delivery_contract_id: mane_v1_5_review_by_chr_v1
+
+genome:
+  id: genome-id
+  display_name: Local genome
+  definition: /path/to/local_genome.json
+  definition_sha256: null
+  fasta: /path/to/reference.fa
+  fasta_sha256: null
+  fai: /path/to/reference.fa.fai
+  fai_sha256: null
+  cytoband: /path/to/cytoband.txt.gz
+  cytoband_sha256: null
+  annotation: /path/to/annotation.gff.gz
+  annotation_version: annotation-release
+  annotation_sha256: null
+
+environment:
+  module_purge: false
+  modules: []
+  venv: null
+
+binaries:
+  rscript: Rscript
+  igv: igv
+  xvfb: Xvfb
+  xwininfo: xwininfo
+  xprop: xprop
+  import: import
+  pdftotext: pdftotext
+  pdftoppm: pdftoppm
+  tesseract: tesseract
+  qsub: qsub
+  qacct: qacct
+  pquota: null
+
+execution:
+  mode: local # local or grid_engine
+
+scheduler:
+  project: null # required for grid_engine
+  owner: null # optional; defaults to the account collecting qacct
+  runtime: "12:00:00"
+  memory_per_core: 8G
+  memory_gb: 8
+  total_parallel_memory_gb: 64
+  max_parallel: 8
+  max_tasks_per_array: 8
+  cases_per_task: 1
+  qsub_timeout_seconds: 60
+
+inputs:
+  expected_case_count: null
+  association_columns:
+    ag_site: AG_site
+    snp: SNP
+    strand: strand
+  rds_filename_template: "AGratio_SNPgeno_{strand_token}_{chrom}_list.rds"
+  locus_sample_columns: [sample_id]
+  ratio_column: ratio
+  bam_lookup_id_columns: [sample_id]
+  bam_lookup_path_columns: [directory, bam, bam_path, path]
+  bam_suffixes:
+    - .accepted_hits.merged.markeddups.recal.bam
+    - .accepted_hits.merged.markdups.recal.bam
+    - .accepted_hits.merged.nodups.recal.bam
+    - .accepted_hits.merged.dedups.recal.bam
+    - .accepted_hits.bam
+    - _Aligned.sortedByCoord.out.bam
+    - .Aligned.sortedByCoord.out.bam
+    - .bam
+  stale_bai_policy: warn # warn or fail
+  require_read_only_annotation: false
+
+render:
+  use_xvfb: true
+  frame_width: 1920
+  frame_height: 2160
+  max_panel_height: 2160
+  overview_max_panel_height: 7000
+  detail_max_panel_height: 1200
+  track_height: 60
+  annotation_display_mode: expand
+  sleep_interval_ms: 500
+  overview_padding: 55
+  detail_padding: 12
+  violin_dpi: 180
+
+desktop:
+  screen_width: 1920
+  screen_height: 2160
+  screen_depth: 24
+  display_min: 90
+  display_max: 199
+  command_port_base: 61000
+  window_title_regex: "\\bIGV\\b"
+  minimum_window_width: 1700
+  minimum_window_height: 1800
+  alignment_policy: collapse_hide
+  root_fallback_enabled: true
+  root_screenshot_publishable: false
+  gui_settle_delay_seconds: 5
+  toolbar_locus_roi: {x: 0, y: 0, width: 1920, height: 120}
+  toolbar_locus_stable_consecutive_frames: 3
+  toolbar_locus_stable_mean_absolute_fraction: 0.0
+  toolbar_locus_stable_changed_pixel_fraction: 0.0
+  locus_field_roi: {x: 467, y: 27, width: 226, height: 24}
+  locus_field_ocr_scale: 6
+  locus_field_ocr_psm: 13
+  locus_field_ocr_whitelist: "chrXx0123456789:,-"
+  locus_ocr_language: eng
+  stable_consecutive_frames: 3
+  retained_stability_frames: 4
+  stable_interval_seconds: 1
+  stable_mean_absolute_fraction: 0.0015
+  stable_changed_pixel_fraction: 0.01
+
+compose:
+  violin_panel_width: 720
+
+qc:
+  raw_min_width: 1000
+  raw_min_height: 400
+  final_min_width: 2640
+  final_min_height: 2160
+  min_stddev: 0.5
+
+scientific:
+  max_sequence_window_bp: 200
+
+publication:
+  chromosomes: [] # empty derives directories from the manifest
+  generate_svg: false
+
+storage:
+  provider: filesystem # filesystem or pquota
+  project_quota_path: null
+  require_same_filesystem: false
+  minimum_free_gb: 1
+  minimum_free_inodes: 1000
+  gate_max_age_seconds: 1800
+  query_timeout_seconds: 30
+  remaining_case_buffer_factor: 1.25
+  work_gb_per_case: 0.25
+  publish_gb_per_case: 0.03125
+  scratch_gb_per_parallel_task: 0.5
+  work_inodes_per_case: 64
+  publish_inodes_per_case: 4
+  reserve_gb: 1
+  reserve_inodes: 1000
+
+timeouts:
+  r_prepare_seconds: 129600 # 36 hours; size this for the full association cohort
+  igv_seconds: 1200
+  pdftotext_seconds: 900
+  pdftoppm_seconds: 300
+  xvfb_start_seconds: 30
+  window_seconds: 180
+  batch_ready_seconds: 900
+  capture_seconds: 60
+  gui_settle_seconds: 120
+  locus_ocr_seconds: 60
+  pixel_stability_seconds: 180
+
+provenance:
+  hash_resources: true
