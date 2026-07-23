@@ -9,9 +9,10 @@ from .utils import safe_name, sha256_json
 def file_identity(path: str | Path, *, sha256: str | None = None) -> dict[str, Any]:
     """Return the stable metadata identity used in canonical provenance.
 
-    Content-sensitive workflow caching is provided by actual Nextflow ``path``
-    inputs. This metadata detects planning/execution drift and remains useful in
-    ledgers without forcing a full BAM hash during normalization.
+    Standard Nextflow ``path`` caching observes file metadata rather than
+    hashing large track contents. This record mirrors that boundary for
+    planning/execution drift and remains useful in ledgers; callers may add a
+    SHA-256 when a resource requires content-level pinning.
     """
 
     resolved = Path(path).expanduser().resolve(strict=True)

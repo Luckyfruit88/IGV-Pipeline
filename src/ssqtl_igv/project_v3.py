@@ -327,7 +327,7 @@ def _ssqtl_bam_lookup_resource_binding(
 
 
 def build_project_source_binding(project: Mapping[str, Any]) -> dict[str, Any]:
-    """Freeze metadata sources whose changes must invalidate ``--resume``."""
+    """Freeze the project source identity compared before ``--resume``."""
 
     root = Path(str(project["project_root"])).resolve(strict=True)
     project_path = Path(str(project["project_path"])).resolve(strict=True)
