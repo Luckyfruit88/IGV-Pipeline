@@ -105,8 +105,8 @@ workflow PORTABLE_RUN {
         def validation = new groovy.json.JsonSlurperClassic().parse(
             bundle.resolve('validation.json').toFile()
         )
-        if (validation.status != 'PASS') {
-            error('runtime manifest validation did not pass')
+        if (!(validation.status in ['PASS', 'STUB'])) {
+            error('runtime manifest validation is neither PASS nor a Nextflow stub')
         }
         groovy.json.JsonOutput.toJson([
             schema_version: validation.schema_version,

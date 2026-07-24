@@ -318,6 +318,7 @@ def test_portable_run_closes_runtime_manifest_preflight_before_cases() -> None:
     assert "IGV_RUNTIME_FINGERPRINT_SHA256" in portable
     assert "val runtime_validation_identity" in portable
     assert "runtimeValidationIdentity" in workflow
+    assert "['PASS', 'STUB']" in workflow
     assert "--explicit-lock-dir contract/material-locks" in validator
     assert "--observed-oci-digest" in validator
     assert "--observed-sif-sha256" in validator
