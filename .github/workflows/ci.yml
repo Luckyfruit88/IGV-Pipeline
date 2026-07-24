@@ -16,6 +16,9 @@ jobs:
   contracts:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      NXF_VER: "25.04.7"
+      NXF_OFFLINE: "true"
     steps:
       - name: Check out the candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,15 +48,87 @@ jobs:
 
       - name: Verify and run Nextflow 25.04.7 lint
         env:
+          NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar
+          NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher
           NEXTFLOW_JAR_SHA256: 231a3c0fc7bae88add57ab420e9c6306ee35ff87b6af356cd2d8aa56347472f3
+          NEXTFLOW_LAUNCHER_SHA256: a57f804243c6fa3b1e3194ab05a054f7799b5d4423049b62bbb171530dba9fe2
           NXF_HOME: ${{ runner.temp }}/nextflow-home
         run: |
           curl --fail --location --silent --show-error \
-            --output "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" \
+            --output "${NXF_BIN}" \
             https://www.nextflow.io/releases/v25.04.7/nextflow-25.04.7-one.jar
+          curl --fail --location --silent --show-error \
+            --output "${NXF_LAUNCHER}" \
+            https://www.nextflow.io/releases/v25.04.7/nextflow
           printf '%s  %s\n' "${NEXTFLOW_JAR_SHA256}" \
-            "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" | sha256sum --check --strict
-          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" lint .
+            "${NXF_BIN}" | sha256sum --check --strict
+          printf '%s  %s\n' "${NEXTFLOW_LAUNCHER_SHA256}" \
+            "${NXF_LAUNCHER}" | sha256sum --check --strict
+          chmod 0555 "${NXF_LAUNCHER}"
+          "${NXF_LAUNCHER}" lint .
+
+      - name: Run the native PROJECT_RUN stub, fake runtime, and resume contract
+        env:
+          NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar
+          NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher
+          NXF_HOME: ${{ runner.temp }}/native-nextflow-home
+          NXF_ANSI_LOG: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_root="${RUNNER_TEMP}/native-project-run"
+          runtime_manifest="${native_root}/runtime-manifest.json"
+          python_bin="$(command -v python)"
+          mkdir -p "${native_root}/fixture"
+          python tests/nextflow/build_project_fixture_v3.py "${native_root}/fixture"
+          python bin/create_runtime_manifest.py \
+            --source-commit "${GITHUB_SHA}" \
+            --source-tree "$(git rev-parse 'HEAD^{tree}')" \
+            --materials-lock containers/runtime-materials.lock.json \
+            --runtime-config src/ssqtl_igv/resources/v3-runtime.yaml \
+            --output "${runtime_manifest}"
+
+          "${NXF_LAUNCHER}" run . \
+            -profile test \
+            -stub-run \
+            -work-dir "${native_root}/stub-work" \
+            --project "${native_root}/fixture/project/project.yaml" \
+            --output "${native_root}/stub-output" \
+            --session_output "${native_root}/stub-output/reports" \
+            --runtime_manifest "${runtime_manifest}" \
+            --python "${python_bin}" \
+            --igv_memory 4GiB \
+            --max_parallel auto \
+            --enable_reports true
+          test -f "${native_root}/stub-output/run_summary.json"
+
+          "${NXF_LAUNCHER}" run . \
+            -profile test \
+            -work-dir "${native_root}/work" \
+            --project "${native_root}/fixture/project/project.yaml" \
+            --output "${native_root}/output" \
+            --session_output "${native_root}/output/reports" \
+            --runtime_manifest "${runtime_manifest}" \
+            --python "${python_bin}" \
+            --igv_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          "${NXF_LAUNCHER}" run . \
+            -profile test \
+            -resume \
+            -work-dir "${native_root}/work" \
+            --project "${native_root}/fixture/project/project.yaml" \
+            --output "${native_root}/output" \
+            --session_output "${native_root}/output/reports" \
+            --runtime_manifest "${runtime_manifest}" \
+            --python "${python_bin}" \
+            --igv_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          python tests/nextflow/verify_project_run_v3.py \
+            "${native_root}/output" --expected-cases 2 --require-cached
 
       - name: Reject malformed patches
         shell: bash
@@ -111,3 +186,77 @@ jobs:
             --tmpfs /work:rw,nosuid,nodev,size=512m \
             --entrypoint runtime-self-test \
             igv-pipeline:ci
+
+      - name: Run raw ssQTL through the native project DAG
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="${RUNNER_TEMP}/native-ssqtl-project"
+          output_root="${RUNNER_TEMP}/native-ssqtl-output"
+          mkdir -p "${fixture_root}" "${output_root}"
+          python3 tests/nextflow/build_ssqtl_project_fixture_v3.py \
+            "${fixture_root}"
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --env HOME=/tmp \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --mount "type=bind,src=${fixture_root}/project,dst=/project" \
+            --mount "type=bind,src=${PWD}/tests/nextflow/build_ssqtl_assets_v3.R,dst=/fixture.R,readonly" \
+            --entrypoint Rscript \
+            igv-pipeline:ci \
+            /fixture.R /project
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --mount "type=bind,src=${fixture_root}/project,dst=/project,readonly" \
+            --mount "type=bind,src=${output_root},dst=/output" \
+            igv-pipeline:ci \
+            nextflow run /opt/igv-pipeline/pipeline \
+            -profile test \
+            -work-dir /output/.work \
+            --project /project/project.yaml \
+            --output /output \
+            --session_output /output/reports \
+            --python python3 \
+            --igv_memory 4GiB \
+            --normalization_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --mount "type=bind,src=${fixture_root}/project,dst=/project,readonly" \
+            --mount "type=bind,src=${output_root},dst=/output" \
+            igv-pipeline:ci \
+            nextflow run /opt/igv-pipeline/pipeline \
+            -profile test \
+            -resume \
+            -work-dir /output/.work \
+            --project /project/project.yaml \
+            --output /output \
+            --session_output /output/reports \
+            --python python3 \
+            --igv_memory 4GiB \
+            --normalization_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          test -d "${output_root}/normalization/normalization_bundle"
+          test ! -e "${output_root}/null"
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --mount "type=bind,src=${PWD},dst=/source,readonly" \
+            --mount "type=bind,src=${output_root},dst=/output" \
+            --entrypoint python3 \
+            igv-pipeline:ci \
+            /source/tests/nextflow/verify_project_run_v3.py \
+            /output --expected-cases 1 --expected-adapter ssqtl --require-cached

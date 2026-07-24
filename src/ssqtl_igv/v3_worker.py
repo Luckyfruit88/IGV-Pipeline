@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import asdict
@@ -33,6 +34,38 @@ from .utils import (
     utc_now,
 )
 from .violin import render_pdf_page
+
+
+class RetryableRenderFailure(RuntimeError):
+    """A resource failure that Nextflow may retry with the next policy rung."""
+
+    def __init__(self, failure_class: str, code: str, message: str):
+        super().__init__(message)
+        self.failure_class = failure_class
+        self.code = code
+
+
+def _retryable_desktop_failure(exc: DesktopFailure) -> RetryableRenderFailure | None:
+    code = str(exc.code).upper()
+    message = str(exc)
+    combined = f"{code}: {message}".upper()
+    if code.endswith("_TIMEOUT"):
+        return RetryableRenderFailure("TIMEOUT", code, message)
+    if any(
+        token in combined
+        for token in (
+            "OUT_OF_MEMORY",
+            "OUT OF MEMORY",
+            "JAVA HEAP SPACE",
+            "GC OVERHEAD LIMIT",
+            "EXITED WITH 137",
+            "EXITED WITH -9",
+            "EXITED WITH 143",
+            "EXITED WITH -15",
+        )
+    ):
+        return RetryableRenderFailure("OOM", code, message)
+    return None
 
 
 class PortableRenderConfig:
@@ -562,6 +595,9 @@ def _run_generic(
                 metadata_path=capture_metadata,
             )
         except DesktopFailure as exc:
+            retryable = _retryable_desktop_failure(exc)
+            if retryable is not None:
+                raise retryable from exc
             raise ValueError(f"{exc.code}: {exc}") from exc
         desktop_evidence = {
             "test_double": False,
@@ -847,7 +883,13 @@ def _run_ssqtl(
 
 
 def _case_result(
-    task: dict[str, Any], output: Path, run_relative: str, evidence: dict[str, Any] | None, failure: str | None
+    task: dict[str, Any],
+    output: Path,
+    run_relative: str,
+    evidence: dict[str, Any] | None,
+    failure: str | None,
+    *,
+    failure_code: str = "CASE_RENDER_FAILED",
 ) -> dict[str, Any]:
     adapter_type = "ssqtl" if task["adapter_id"] == "ssqtl" else "generic"
     test_double = bool(evidence and evidence.get("test_double"))
@@ -925,7 +967,9 @@ def _case_result(
         ),
         "artifacts": artifacts,
         "pixel_identity": evidence.get("pixel_identity") if evidence else None,
-        "failures": [] if failure is None else [{"code": "CASE_RENDER_FAILED", "message": failure}],
+        "failures": []
+        if failure is None
+        else [{"code": failure_code, "message": failure}],
         "created_at": utc_now(),
     }
 
@@ -938,7 +982,11 @@ def run_portable_task(
     runtime_config: str | Path | None = None,
     fake_runtime: bool = False,
     schema_dir: str | Path | None = None,
+    attempt: int = 1,
+    max_attempts: int = 3,
 ) -> dict[str, Any]:
+    if not 1 <= int(attempt) <= int(max_attempts) or int(max_attempts) != 3:
+        raise ValueError("attempt must be within the fixed 1..3 render ladder")
     validate_v3_task_document(task, schema_dir=schema_dir)
     output = Path(output_dir).expanduser().resolve(strict=False)
     if output.exists():
@@ -946,6 +994,7 @@ def run_portable_task(
     output.mkdir(parents=True)
     run_relative = f"results/cases/{task['task_id']}"
     failure: str | None = None
+    failure_code = "CASE_RENDER_FAILED"
     evidence: dict[str, Any] | None = None
     try:
         preflight = task["core"]["preflight"]
@@ -976,9 +1025,28 @@ def run_portable_task(
                     runtime_config,
                     alias_root,
                 )
-    except (ValueError, subprocess.TimeoutExpired) as exc:
+    except RetryableRenderFailure as exc:
+        if int(attempt) < int(max_attempts):
+            raise
+        failure_code = "RESOURCE_EXHAUSTED"
+        failure = f"{exc.failure_class}:{exc.code}: {exc}"
+    except subprocess.TimeoutExpired as exc:
+        if int(attempt) < int(max_attempts):
+            raise RetryableRenderFailure(
+                "TIMEOUT", "SUBPROCESS_TIMEOUT", str(exc)
+            ) from exc
+        failure_code = "RESOURCE_EXHAUSTED"
+        failure = f"TIMEOUT:SUBPROCESS_TIMEOUT: {exc}"
+    except ValueError as exc:
         failure = f"{type(exc).__name__}: {exc}"
-    result = _case_result(task, output, run_relative, evidence, failure)
+    result = _case_result(
+        task,
+        output,
+        run_relative,
+        evidence,
+        failure,
+        failure_code=failure_code,
+    )
     validate_v3_case_result_document(result, schema_dir=schema_dir)
     atomic_write_json(output / "case_result.json", result)
     terminal = {
@@ -989,7 +1057,15 @@ def run_portable_task(
         "task_id": task["task_id"],
         "manifest_order": task["manifest_order"],
         "input_fingerprint": task["input_fingerprint"],
-        "status": "SUCCEEDED" if result["eligible"] else "DOMAIN_FAILED",
+        "status": (
+            "SUCCEEDED"
+            if result["eligible"]
+            else "RESOURCE_EXHAUSTED"
+            if result["failures"]
+            and result["failures"][0]["code"] == "RESOURCE_EXHAUSTED"
+            else "DOMAIN_FAILED"
+        ),
+        "attempt": int(attempt),
         "case_result_sha256": sha256_file(output / "case_result.json"),
         "case_result_size": (output / "case_result.json").stat().st_size,
         "artifact_set_sha256": hashlib.sha256(
@@ -1028,9 +1104,28 @@ def _encoded_input_mapping(values: list[str]) -> dict[str, str]:
     return _input_mapping(decoded)
 
 
+def _encoded_task(value: str) -> dict[str, Any]:
+    try:
+        padding = "=" * (-len(value) % 4)
+        raw = base64.urlsafe_b64decode((value + padding).encode("ascii"))
+        task = json.loads(raw.decode("utf-8"))
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        UnicodeEncodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("invalid --task-json-b64 payload") from exc
+    if not isinstance(task, dict):
+        raise ValueError("--task-json-b64 must encode one JSON object")
+    return task
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one schema-3.0 portable IGV case")
-    parser.add_argument("--task-manifest", required=True)
+    task_source = parser.add_mutually_exclusive_group(required=True)
+    task_source.add_argument("--task-manifest")
+    task_source.add_argument("--task-json-b64")
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--staged-input", action="append", default=[])
     parser.add_argument("--staged-input-b64", action="append", default=[])
@@ -1038,8 +1133,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-config")
     parser.add_argument("--schema-dir")
     parser.add_argument("--fake-runtime", action="store_true")
+    parser.add_argument("--attempt", type=int, default=1)
+    parser.add_argument("--max-attempts", type=int, default=3)
     args = parser.parse_args(argv)
-    task = _task_from_manifest(args.task_manifest, args.task_id)
+    task = (
+        _encoded_task(args.task_json_b64)
+        if args.task_json_b64
+        else _task_from_manifest(args.task_manifest, args.task_id)
+    )
+    if str(task.get("task_id")) != args.task_id:
+        parser.error("task JSON identity differs from --task-id")
     if args.staged_input and args.staged_input_b64:
         parser.error("use only one staged input encoding")
     staged = (
@@ -1047,14 +1150,33 @@ def main(argv: list[str] | None = None) -> int:
         if args.staged_input_b64
         else _input_mapping(args.staged_input)
     )
-    result = run_portable_task(
-        task,
-        staged,
-        args.output_dir,
-        runtime_config=args.runtime_config,
-        fake_runtime=args.fake_runtime,
-        schema_dir=args.schema_dir,
-    )
+    try:
+        result = run_portable_task(
+            task,
+            staged,
+            args.output_dir,
+            runtime_config=args.runtime_config,
+            fake_runtime=args.fake_runtime,
+            schema_dir=args.schema_dir,
+            attempt=args.attempt,
+            max_attempts=args.max_attempts,
+        )
+    except RetryableRenderFailure as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "RETRYABLE_RESOURCE_FAILURE",
+                    "failure_class": exc.failure_class,
+                    "code": exc.code,
+                    "attempt": args.attempt,
+                    "max_attempts": args.max_attempts,
+                    "message": str(exc),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 75
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

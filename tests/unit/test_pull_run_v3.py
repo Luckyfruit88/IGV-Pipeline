@@ -43,6 +43,12 @@ def test_public_run_parser_exposes_only_pull_and_run_options() -> None:
         "--resume",
         "--max-parallel",
         "--max-cases-per-shard",
+        "--igv-cpus",
+        "--igv-memory",
+        "--igv-timeout",
+        "--normalization-cpus",
+        "--normalization-memory",
+        "--normalization-timeout",
     }
     args = parser.parse_args(["run"])
     assert args.project == "/project/project.yaml"
@@ -73,20 +79,15 @@ def test_generic_run_uses_project_and_embedded_runtime_without_identity_flags(
     runtime = tmp_path / "runtime-manifest.json"
     runtime.write_text("{}\n", encoding="utf-8")
     output = tmp_path / "output"
-    captured: dict[str, dict] = {}
+    captured: dict[str, object] = {}
 
     monkeypatch.setenv("IGV_RUNTIME_MANIFEST_INTERNAL", str(runtime))
 
-    def prepare(**kwargs: object) -> dict:
-        captured["prepare"] = dict(kwargs)
-        return {"run_dir": str(output), "identity": {}}
+    def launch(**kwargs: object) -> tuple[dict, int]:
+        captured.update(kwargs)
+        return {"status": "SNAPSHOTS_READY", "exit_code": 0}, 0
 
-    def execute(_prepared: dict, **kwargs: object) -> dict:
-        captured["execute"] = dict(kwargs)
-        return {"status": "SNAPSHOTS_READY", "exit_code": 0}
-
-    monkeypatch.setattr(v3_cli, "prepare_portable_run", prepare)
-    monkeypatch.setattr(v3_cli, "execute_portable_run", execute)
+    monkeypatch.setattr(v3_cli, "run_project_workflow", launch)
     args = v3_cli._parser().parse_args(
         [
             "run",
@@ -102,17 +103,22 @@ def test_generic_run_uses_project_and_embedded_runtime_without_identity_flags(
     result, code = v3_cli._run(args)
 
     assert (result["status"], code) == ("SNAPSHOTS_READY", 0)
-    assert captured["prepare"]["adapter"] == "generic"
-    assert captured["prepare"]["manifest"] == str((tmp_path / "cases.tsv").resolve())
-    assert captured["prepare"]["runtime_identity_path"] == runtime
-    assert captured["prepare"]["project_binding"]["schema_version"] == (
-        "3.0-project-source-binding"
-    )
-    assert len(captured["prepare"]["project_binding"]["binding_sha256"]) == 64
-    assert captured["prepare"]["max_parallel"] == 3
-    assert captured["execute"]["profile"] == "standalone"
-    assert captured["execute"]["work_dir"] == output / ".work"
-    assert captured["execute"]["max_parallel"] == 3
+    assert captured == {
+        "project": str(project),
+        "batch_request": None,
+        "output": output,
+        "work": None,
+        "resume": False,
+        "max_parallel": "3",
+        "max_cases_per_shard": 256,
+        "runtime_manifest": runtime,
+        "igv_cpus": 1,
+        "igv_memory": "8GiB",
+        "igv_timeout": "30m",
+        "normalization_cpus": 1,
+        "normalization_memory": "12GiB",
+        "normalization_timeout": "36h",
+    }
 
 
 def test_resume_rejects_unpublished_runtime_identity_contract(tmp_path: Path) -> None:

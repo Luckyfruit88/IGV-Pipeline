@@ -4,6 +4,12 @@ set -euo pipefail
 igv_root=/opt/igv
 igv_java_home="${IGV_JAVA_HOME:-${igv_root}/jdk-11}"
 igv_java="${igv_java_home}/bin/java"
+igv_heap="${IGV_HEAP:-6g}"
+
+[[ "${igv_heap}" =~ ^[1-9][0-9]*[gm]$ ]] || {
+    printf 'IGV runtime: invalid IGV_HEAP value: %s\n' "${igv_heap}" >&2
+    exit 64
+}
 
 usage() {
     printf '%s\n' \
@@ -21,7 +27,7 @@ case "${1:-}" in
         test -f "${igv_root}/lib/igv.jar"
         test -f "${igv_root}/igv.args"
         "${igv_java}" -version 2>&1 | grep -Eq 'version "11\.'
-        printf '%s\n' 'IGV_RUNTIME_OK version=2.16.2 java=11 heap=6g'
+        printf 'IGV_RUNTIME_OK version=2.16.2 java=11 heap=%s\n' "${igv_heap}"
         exit 0
         ;;
 esac
@@ -33,7 +39,7 @@ export LD_LIBRARY_PATH="/opt/igv-helper/lib:${igv_java_home}/lib:${igv_java_home
 exec "${igv_java}" \
     -showversion \
     --module-path="${igv_root}/lib" \
-    -Xmx6g \
+    -Xmx"${igv_heap}" \
     @"${igv_root}/igv.args" \
     -Dapple.laf.useScreenMenuBar=true \
     -Djava.net.preferIPv4Stack=true \

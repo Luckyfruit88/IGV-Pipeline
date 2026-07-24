@@ -62,7 +62,8 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert "IGV_SNAPSHOT_PIPELINE_DIR=/opt/igv-pipeline/pipeline" in dockerfile
     assert "IGV_RUNTIME_MANIFEST=/opt/igv-pipeline/runtime-manifest.json" in dockerfile
     assert 'igv_java_home="${IGV_JAVA_HOME:-${igv_root}/jdk-11}"' in igv_wrapper
-    assert "-Xmx6g" in igv_wrapper
+    assert 'igv_heap="${IGV_HEAP:-6g}"' in igv_wrapper
+    assert '-Xmx"${igv_heap}"' in igv_wrapper
     assert "/opt/java-21" in nextflow_wrapper
     assert "nextflow-25.04.7-one.jar" in nextflow_wrapper
     assert "nextflow-25.04.7-launcher" in nextflow_wrapper
@@ -80,6 +81,9 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert 'init|import-v2)' in entrypoint
     assert '--help|-h|--version)' in entrypoint
     assert 'exec "${cli}" "$@"' in entrypoint
+    assert '[[ "$1" == "nextflow" ]]' in entrypoint
+    assert '[[ "$1" == "run" ]]' in entrypoint
+    assert 'exec /usr/local/bin/nextflow "$@"' in entrypoint
     assert '[[ "$1" == "/bin/bash" ]]' in entrypoint
     assert '[[ "$(id -u)" != 0 ]]' in entrypoint
     assert '[[ "$1" == "run" ||' in entrypoint
@@ -109,13 +113,31 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert "USER 65532:65532" in dockerfile
 
 
-def test_runtime_entrypoint_self_tests_only_execution_capable_campaign_commands() -> None:
+def test_contract_ci_uses_the_checksum_pinned_nextflow_launcher() -> None:
+    workflow = _text(".github/workflows/ci.yml")
+
+    assert "NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar" in workflow
+    assert "NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher" in workflow
+    assert "a57f804243c6fa3b1e3194ab05a054f7799b5d4423049b62bbb171530dba9fe2" in workflow
+    assert 'chmod 0555 "${NXF_LAUNCHER}"' in workflow
+    assert '"${NXF_LAUNCHER}" lint .' in workflow
+    assert workflow.count('"${NXF_LAUNCHER}" run .') == 3
+    assert "java -jar" not in workflow
+
+
+def test_runtime_entrypoint_self_tests_only_execution_capable_commands() -> None:
     entrypoint = _text("containers/bin/runtime-entrypoint")
 
-    assert entrypoint.count("/usr/local/bin/runtime-self-test >/dev/null") == 1
+    assert entrypoint.count("/usr/local/bin/runtime-self-test >/dev/null") == 2
+    nextflow_condition = entrypoint[
+        entrypoint.index('if [[ "$1" == "nextflow"')
+        : entrypoint.index('case "$1" in')
+    ]
+    assert '[[ "$1" == "run" ]]' in nextflow_condition
+    assert 'exec /usr/local/bin/nextflow "$@"' in nextflow_condition
     condition = entrypoint[
         entrypoint.index('if [[ "$1" == "run"')
-        : entrypoint.index("/usr/local/bin/runtime-self-test >/dev/null")
+        : entrypoint.rindex("/usr/local/bin/runtime-self-test >/dev/null")
     ]
     assert '"${2:-}" == "prepare-master"' in condition
     assert '"${2:-}" == "run-batch"' in condition
@@ -306,7 +328,9 @@ def test_portable_run_closes_runtime_manifest_preflight_before_cases() -> None:
     assert "--expected-fingerprint-sha256" in validator
     assert "val runtime_fingerprint_sha256" in portable
     assert "IGV_RUNTIME_FINGERPRINT_SHA256" in portable
-    assert "path runtime_validation" in portable
+    assert "val runtime_validation_identity" in portable
+    assert "runtimeValidationIdentity" in workflow
+    assert "['PASS', 'STUB']" in workflow
     assert "--explicit-lock-dir contract/material-locks" in validator
     assert "--observed-oci-digest" in validator
     assert "--observed-sif-sha256" in validator

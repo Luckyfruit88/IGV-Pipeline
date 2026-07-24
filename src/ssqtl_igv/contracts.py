@@ -70,6 +70,7 @@ SCHEMA_FILES = {
     "task-v3": "task-v3.schema.json",
     "case-result-v3": "case-result-v3.schema.json",
     "terminal-bundle-v3": "terminal-bundle-v3.schema.json",
+    "execution-policy-v3": "execution-policy-v3.schema.json",
     "stage-result": "stage-result.schema.json",
     "case-result": "case-result.schema.json",
     "review": "review.schema.json",
@@ -509,7 +510,17 @@ def validate_v3_terminal_bundle_document(
             raise ContractValidationError(
                 f"terminal bundle differs from case result identity: {field}"
             )
-    expected_status = "SUCCEEDED" if case_result["eligible"] else "DOMAIN_FAILED"
+    resource_exhausted = bool(
+        case_result.get("failures")
+        and case_result["failures"][0].get("code") == "RESOURCE_EXHAUSTED"
+    )
+    expected_status = (
+        "SUCCEEDED"
+        if case_result["eligible"]
+        else "RESOURCE_EXHAUSTED"
+        if resource_exhausted
+        else "DOMAIN_FAILED"
+    )
     if bundle["status"] != expected_status:
         raise ContractValidationError("terminal bundle status differs from case eligibility")
     if bundle["artifact_set_sha256"] != sha256_json(case_result["artifacts"]):

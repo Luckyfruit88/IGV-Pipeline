@@ -64,7 +64,6 @@ _ALLOWED_OPTIONS = {
     "stale_bai_policy",
     "overview_padding",
     "detail_padding",
-    "estimated_runtime_seconds",
 }
 _DEFAULT_OPTIONS: dict[str, Any] = {
     "schema_version": SSQTL_ADAPTER_SCHEMA_VERSION,
@@ -80,7 +79,6 @@ _DEFAULT_OPTIONS: dict[str, Any] = {
     "stale_bai_policy": "warn",
     "overview_padding": 55,
     "detail_padding": 12,
-    "estimated_runtime_seconds": 90.0,
 }
 
 
@@ -175,10 +173,6 @@ def _load_options(config_path: Path | None) -> tuple[dict[str, Any], str, str | 
     for key in ("overview_padding", "detail_padding"):
         if not isinstance(options.get(key), int) or isinstance(options[key], bool) or options[key] < 0:
             raise ValueError(f"{key} must be a non-negative integer")
-    runtime = options.get("estimated_runtime_seconds")
-    if not isinstance(runtime, (int, float)) or isinstance(runtime, bool) or runtime <= 0:
-        raise ValueError("estimated_runtime_seconds must be positive")
-    options["estimated_runtime_seconds"] = float(runtime)
     return options, sha256_json(options), source_sha
 
 
@@ -511,7 +505,7 @@ def normalize_ssqtl_inputs(
                 cytoband=reference["resources"]["cytoband"]["source_path"],
                 annotation=reference["resources"]["annotation"]["source_path"],
                 expected_case_count=options["expected_case_count"],
-                estimated_runtime_seconds=options["estimated_runtime_seconds"],
+                estimated_runtime_seconds=90.0,
             )
             prepared_tasks = list(read_jsonl(private["tasks"]))
             if not prepared_tasks:

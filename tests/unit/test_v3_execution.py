@@ -27,6 +27,7 @@ from ssqtl_igv.utils import read_jsonl, sha256_file, sha256_json, write_tsv
 from ssqtl_igv.v3_manifest import GENERIC_MANIFEST_FIELDS, normalize_generic_manifest
 from ssqtl_igv.v3_worker import (
     PortableRenderConfig,
+    RetryableRenderFailure,
     _case_result,
     _identity_matches,
     _samtools_validate,
@@ -159,7 +160,7 @@ def test_bounded_sharding_preserves_one_based_manifest_order(tmp_path: Path) -> 
         normalized["tasks"], tmp_path / "shards", max_cases_per_shard=2
     )
     assert [row["case_count"] for row in plan["shards"]] == [2, 1]
-    assert plan["active_shard_limit"] == 1
+    assert plan["scheduling_role"] == "LOGICAL_ONLY"
     assert [task["manifest_order"] for task in read_jsonl(plan["shards"][0]["path"])] == [1, 2]
 
 
@@ -379,6 +380,63 @@ def test_invalid_auxiliary_image_is_a_terminal_case_failure(tmp_path: Path) -> N
     assert result["failures"][0]["code"] == "CASE_RENDER_FAILED"
     terminal = json.loads((output / "terminal_bundle.json").read_text())
     assert terminal["status"] == "DOMAIN_FAILED"
+
+
+def test_retryable_resource_failure_uses_two_retries_then_terminal_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    normalized = _normalized(tmp_path)
+    task = next(read_jsonl(normalized["tasks"]))
+    staged = {
+        resource["stage_name"]: resource["source_path"]
+        for resource in (
+            [
+                item
+                for track in task["core"]["tracks"]
+                for item in (track["bam"], track["bai"])
+            ]
+            + list(task["core"]["reference"]["resources"].values())
+        )
+    }
+
+    def resource_failure(*_args: object, **_kwargs: object) -> dict:
+        raise RetryableRenderFailure(
+            "TIMEOUT", "PIXEL_STABILITY_TIMEOUT", "fixture timeout"
+        )
+
+    monkeypatch.setattr("ssqtl_igv.v3_worker._run_generic", resource_failure)
+    for attempt in (1, 2):
+        with pytest.raises(RetryableRenderFailure):
+            run_portable_task(
+                task,
+                staged,
+                tmp_path / f"retry-{attempt}",
+                attempt=attempt,
+            )
+        assert not (tmp_path / f"retry-{attempt}" / "terminal_bundle.json").exists()
+
+    final_root = tmp_path / "retry-3"
+    result = run_portable_task(task, staged, final_root, attempt=3)
+    assert result["render_state"] == "FAILED"
+    assert result["failures"][0]["code"] == "RESOURCE_EXHAUSTED"
+    terminal = json.loads((final_root / "terminal_bundle.json").read_text())
+    assert terminal["status"] == "RESOURCE_EXHAUSTED"
+    assert terminal["attempt"] == 3
+
+
+def test_render_process_uses_dynamic_attempt_policy_and_no_native_duplication() -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = (root / "modules/local/run_portable_case.nf").read_text(
+        encoding="utf-8"
+    )
+    assert "task.attempt" in module
+    assert "task.exitStatus in [75, 137, 143]" in module
+    assert "maxRetries 2" in module
+    assert "IGV_HEAP='${attemptPolicy.igv_heap_argument}'" in module
+    assert "enabled: params.publish_intermediate_case_outputs" in module
+
+    base_config = (root / "conf/base.config").read_text(encoding="utf-8")
+    assert "publish_intermediate_case_outputs = false" in base_config
 
 
 def test_two_shard_recovery_keeps_shared_runtime_validator_lineage(tmp_path: Path) -> None:
@@ -905,6 +963,8 @@ def test_portable_nextflow_stub_contract_is_executable(tmp_path: Path) -> None:
         "true",
         "--session_output",
         str(session),
+        "--publish_intermediate_case_outputs",
+        "true",
     ]
     completed = subprocess.run(
         command,
@@ -985,6 +1045,8 @@ def test_portable_nextflow_fake_runtime_executes_module_entrypoint(tmp_path: Pat
         "true",
         "--session_output",
         str(session),
+        "--publish_intermediate_case_outputs",
+        "true",
     ]
     completed = subprocess.run(
         command,

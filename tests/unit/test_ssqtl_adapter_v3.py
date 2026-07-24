@@ -680,13 +680,18 @@ def test_public_cli_uses_project_yaml_not_raw_ssqtl_flags() -> None:
         parser.parse_args(["run", "--adapter", "ssqtl", "--associations", "a.csv"])
 
 
-def test_ssqtl_preparation_is_a_non_cached_portable_nextflow_process() -> None:
+def test_ssqtl_preparation_is_policy_bound_and_fail_fast() -> None:
     root = Path(__file__).resolve().parents[2]
     module = (root / "modules/local/normalize_ssqtl_v3.nf").read_text(encoding="utf-8")
     workflow = (root / "workflows/ssqtl_normalize.nf").read_text(encoding="utf-8")
     assert "label 'portable_runtime'" in module
-    assert "label 'prepare'" in module
-    assert "cache false" in module
+    assert "label 'adaptive_normalization'" in module
+    assert "cache 'deep'" in module
+    assert "errorStrategy 'terminate'" in module
+    assert "maxRetries 0" in module
+    assert "val normalization_output" in module
+    assert "publishDir { normalization_output }" in module
+    assert "path execution_policy" in module
     assert "NORMALIZE_SSQTL_V3" in workflow
     assert "VALIDATE_RUNTIME_IDENTITY" in workflow
 

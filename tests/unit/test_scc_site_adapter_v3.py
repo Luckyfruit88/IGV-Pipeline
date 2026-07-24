@@ -57,7 +57,7 @@ def test_scc_site_adapter_is_immutable_across_resume_attempts(tmp_path: Path) ->
         run, project="fixture-project", qname="fixture.q"
     )
     assert expected["cluster_options"] == ["-P", "fixture-project", "-q", "fixture.q"]
-    assert expected["active_shard_limit"] == 1
+    assert expected["scheduling_role"] == "LEGACY_SGE_SHARD_LIMIT"
     assert expected["portable_render_max_forks"] == 8
     assert expected["max_cases_per_shard_limit"] == 256
     assert _freeze_scc_site_adapter(
@@ -189,8 +189,8 @@ def test_scc_schema_and_config_share_the_strict_site_contract() -> None:
     assert "withLabel: portable_runtime" in scc
     assert "params.scc_project" in scc and "params.scc_qname" in scc
     assert 'qname ? "-P ${project} -q ${qname}" : "-P ${project}"' in scc
-    assert "maxForks = params.max_parallel" in scc
-    assert '"active_shard_limit": 1' in sharding
+    assert "maxForks = params.max_parallel.toString() == 'auto' ? 8" in scc
+    assert '"scheduling_role": "LOGICAL_ONLY"' in sharding
     assert 'expected_project=site_adapter["project"]' in orchestrator
     assert 'expected_qname=site_adapter["qname"]' in orchestrator
 

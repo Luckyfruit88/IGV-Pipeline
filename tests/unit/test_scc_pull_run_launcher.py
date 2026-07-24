@@ -32,11 +32,22 @@ def _write_site_config(
     qname: str | None = None,
     pe: str = "omp",
     engine: str = "apptainer",
+    slots: int = 8,
+    memory_per_slot: str = "8GiB",
+    walltime: str = "04:00:00",
 ) -> Path:
     path = tmp_path / "bu-scc-site.json"
     path.write_text(
         json.dumps(
-            {"project": project, "qname": qname, "pe": pe, "engine": engine}
+            {
+                "project": project,
+                "qname": qname,
+                "pe": pe,
+                "engine": engine,
+                "slots": slots,
+                "memory_per_slot": memory_per_slot,
+                "walltime": walltime,
+            }
         ),
         encoding="utf-8",
     )
@@ -68,6 +79,9 @@ def test_example_config_is_the_minimal_site_contract() -> None:
         "qname": None,
         "pe": "omp",
         "engine": "apptainer",
+        "slots": 8,
+        "memory_per_slot": "8GiB",
+        "walltime": "04:00:00",
     }
 
 
@@ -75,7 +89,13 @@ def test_dry_run_freezes_one_job_resources_and_local_container_execution(
     tmp_path: Path,
 ) -> None:
     project, output, sif = _fixture_paths(tmp_path)
-    config = _write_site_config(tmp_path, qname="scc-cpu.q")
+    config = _write_site_config(
+        tmp_path,
+        qname="scc-cpu.q",
+        slots=4,
+        memory_per_slot="16GiB",
+        walltime="06:30:00",
+    )
 
     result = subprocess.run(
         _command(config, project, output, sif, "--resume", "--dry-run"),
@@ -89,14 +109,17 @@ def test_dry_run_freezes_one_job_resources_and_local_container_execution(
     assert command.count("qsub") == 1
     assert " -P example-project" in command
     assert " -q scc-cpu.q" in command
-    assert " -pe omp 8" in command
-    assert " -l mem_per_core=8G" in command
-    assert " -l h_rt=04:00:00" in command
+    assert " -pe omp 4" in command
+    assert " -l mem_per_core=16G" in command
+    assert " -l h_rt=06:30:00" in command
     assert " -b y apptainer run" in command
     assert " --cleanenv --containall --no-home --net --network none" in command
+    assert " --env IGV_SCC_SLOTS=4" in command
+    assert " --env IGV_SCC_MEMORY_PER_SLOT=16GiB" in command
+    assert " --env IGV_SCC_WALLTIME=06:30:00" in command
     assert f" --bind {project}:/project:ro" in command
     assert f" --bind {output}:/output:rw" in command
-    assert f" {sif} run --max-parallel 8 --resume" in command
+    assert f" {sif} run --max-parallel auto --resume" in command
     assert "nextflow" not in command
     assert "qacct" not in command
     assert "signature" not in command
@@ -161,7 +184,15 @@ def test_real_submission_invokes_qsub_once_and_reports_job_id(tmp_path: Path) ->
         "--network",
         "none",
     ]
-    assert arguments[-3:] == ["run", "--max-parallel", "8"]
+    assert arguments[binary_index + 8 : binary_index + 14] == [
+        "--env",
+        "IGV_SCC_SLOTS=8",
+        "--env",
+        "IGV_SCC_MEMORY_PER_SLOT=8GiB",
+        "--env",
+        "IGV_SCC_WALLTIME=04:00:00",
+    ]
+    assert arguments[-3:] == ["run", "--max-parallel", "auto"]
 
 
 def test_batch_request_mode_adds_read_only_campaign_bind_and_keeps_one_job(
@@ -199,7 +230,7 @@ def test_batch_request_mode_adds_read_only_campaign_bind_and_keeps_one_job(
     assert (
         f" {sif} campaign run-batch"
         " --batch-request /campaign/batches/pilot-001/batch-request.json"
-        " --output /output --max-parallel 8 --resume"
+        " --output /output --max-parallel auto --resume"
     ) in command
     assert f" {sif} run " not in command
     assert "qacct" not in command
@@ -207,12 +238,30 @@ def test_batch_request_mode_adds_read_only_campaign_bind_and_keeps_one_job(
 
 def test_site_config_rejects_unknown_or_shell_active_values(tmp_path: Path) -> None:
     project, output, sif = _fixture_paths(tmp_path)
+    base = {
+        "project": "example-project",
+        "qname": None,
+        "pe": "omp",
+        "engine": "apptainer",
+        "slots": 8,
+        "memory_per_slot": "8GiB",
+        "walltime": "04:00:00",
+    }
     cases = [
-        {"project": "example-project;id", "qname": None, "pe": "omp", "engine": "apptainer"},
-        {"project": "example-project", "qname": "queue@node*", "pe": "omp", "engine": "apptainer"},
-        {"project": "example-project", "qname": None, "pe": "omp 8", "engine": "apptainer"},
-        {"project": "example-project", "qname": None, "pe": "omp", "engine": "docker"},
-        {"project": "example-project", "qname": None, "pe": "omp", "engine": "apptainer", "key": "unused"},
+        {**base, "project": "example-project;id"},
+        {**base, "qname": "queue@node*"},
+        {**base, "pe": "omp 8"},
+        {**base, "engine": "docker"},
+        {**base, "key": "unused"},
+        {key: value for key, value in base.items() if key != "slots"},
+        {**base, "slots": True},
+        {**base, "slots": 0},
+        {**base, "slots": 9},
+        {**base, "memory_per_slot": "8G"},
+        {**base, "memory_per_slot": "0GiB"},
+        {**base, "walltime": "4:00:00"},
+        {**base, "walltime": "04:60:00"},
+        {**base, "walltime": "00:30:00"},
     ]
 
     for index, value in enumerate(cases):

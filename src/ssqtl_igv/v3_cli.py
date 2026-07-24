@@ -6,31 +6,37 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .campaign_v3 import (
     create_next_batch,
-    load_and_validate_batch_request,
     prepare_campaign,
     reduce_campaign_status,
 )
 from .migration_v3 import import_v2_read_only
 from .orchestrator_v3 import (
-    execute_portable_run,
-    prepare_portable_run,
     resolve_max_parallel,
     run_portable_ssqtl_normalization,
 )
 from .probes_v3 import collect_doctor_report
-from .project_v3 import build_project_source_binding, load_project_config
+from .project_launcher import run_project_workflow
+from .project_v3 import load_project_config
 from .publication import build_publication_promotion_receipt, promote_publication
 from .publication_v3 import build_publication_staging
 from .review_server import finalize_review, serve_review
 from .runtime_identity import RUNTIME_MANIFEST_IMAGE_PATH
 from .utils import reject_symlink_path_components, sha256_file
 from .v3_manifest import init_templates
+
+
+def _add_resource_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--igv-cpus", type=int, default=1)
+    parser.add_argument("--igv-memory", default="8GiB")
+    parser.add_argument("--igv-timeout", default="30m")
+    parser.add_argument("--normalization-cpus", type=int, default=1)
+    parser.add_argument("--normalization-memory", default="12GiB")
+    parser.add_argument("--normalization-timeout", default="36h")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -59,6 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", action="store_true")
     run.add_argument("--max-parallel", default="auto", metavar="auto|N")
     run.add_argument("--max-cases-per-shard", type=int, default=256)
+    _add_resource_options(run)
 
     review = subparsers.add_parser(
         "review", help="optionally serve the localhost review UI or finalize decisions"
@@ -126,6 +133,7 @@ def _parser() -> argparse.ArgumentParser:
     campaign_run_batch.add_argument(
         "--max-cases-per-shard", type=int, default=256
     )
+    _add_resource_options(campaign_run_batch)
 
     campaign_status = campaign_commands.add_parser(
         "status", help="reduce live authoritative sources without writing campaign state"
@@ -151,10 +159,6 @@ def _emit(value: dict[str, Any], *, stream: Any | None = None) -> None:
         json.dumps(value, sort_keys=True, ensure_ascii=False),
         file=sys.stdout if stream is None else stream,
     )
-
-
-def _default_run_id() -> str:
-    return "run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _embedded_runtime_manifest() -> Path:
@@ -212,90 +216,27 @@ def _finalized_review_receipt(output: Path, explicit: str | None) -> Path:
 
 
 def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    project = load_project_config(args.project)
-    project_binding = build_project_source_binding(project)
     output = reject_symlink_path_components(args.output, label="output directory").resolve(
         strict=False
     )
-    work_value = args.work if args.work else output / ".work"
-    work = reject_symlink_path_components(work_value, label="work directory").resolve(
-        strict=False
-    )
-    runtime_manifest = _embedded_runtime_manifest()
-    max_parallel = resolve_max_parallel(args.max_parallel)
-    if not 1 <= args.max_cases_per_shard <= 256:
-        raise ValueError("--max-cases-per-shard must be between 1 and 256")
-
     if args.resume:
-        frozen = _resume_identity(output)
-        run_id = str(frozen["run_id"])
-        generation_id = str(frozen["generation_id"])
-        if frozen.get("adapter") != project["adapter"]:
-            raise ValueError("project adapter differs from the immutable resumed run")
-    else:
-        run_id = _default_run_id()
-        generation_id = "generation-001"
-
-    normalization_execution: dict[str, Any] | None = None
-    if project["adapter"] == "ssqtl" and not args.resume:
-        inputs = project["inputs"]
-        normalization_execution = run_portable_ssqtl_normalization(
-            run_dir=output,
-            run_id=run_id,
-            generation_id=generation_id,
-            profile="standalone",
-            associations=inputs["associations"]["declared_path"],
-            rds_dir=inputs["rds_dir"]["declared_path"],
-            bam_lookup=inputs["bam_lookup"]["declared_path"],
-            violin_dir=inputs["violin_dir"]["declared_path"],
-            input_root=project["project_root"],
-            reference=project["reference"]["source_path"],
-            adapter_config=(inputs.get("config") or {}).get("declared_path"),
-            runtime_identity_path=runtime_manifest,
-            nextflow=None,
-            work_dir=work,
-            max_parallel=max_parallel,
-        )
-    try:
-        prepared = prepare_portable_run(
-            run_dir=output,
-            run_id=run_id,
-            generation_id=generation_id,
-            profile="standalone",
-            adapter=project["adapter"],
-            runtime_identity_path=runtime_manifest,
-            project_binding=project_binding,
-            manifest=(
-                project["inputs"]["cases"]["source_path"]
-                if project["adapter"] == "generic"
-                else None
-            ),
-            input_root=project["project_root"] if project["adapter"] == "generic" else None,
-            reference=(
-                project["reference"]["source_path"]
-                if project["adapter"] == "generic"
-                else None
-            ),
-            ssqtl_normalization_bundle=(normalization_execution or {}).get("bundle"),
-            ssqtl_normalization_execution=normalization_execution,
-            max_cases_per_shard=args.max_cases_per_shard,
-            max_parallel=max_parallel,
-            resume=args.resume,
-        )
-    finally:
-        if normalization_execution:
-            shutil.rmtree(normalization_execution["temporary_root"], ignore_errors=True)
-
-    result = execute_portable_run(
-        prepared,
-        profile="standalone",
-        runtime_identity_path=runtime_manifest,
-        nextflow=None,
-        work_dir=work,
+        _resume_identity(output)
+    return run_project_workflow(
+        project=args.project,
+        batch_request=None,
+        output=output,
+        work=args.work,
         resume=args.resume,
-        max_parallel=max_parallel,
+        max_parallel=args.max_parallel,
+        max_cases_per_shard=args.max_cases_per_shard,
+        runtime_manifest=_embedded_runtime_manifest(),
+        igv_cpus=args.igv_cpus,
+        igv_memory=args.igv_memory,
+        igv_timeout=args.igv_timeout,
+        normalization_cpus=args.normalization_cpus,
+        normalization_memory=args.normalization_memory,
+        normalization_timeout=args.normalization_timeout,
     )
-    return result, int(result.get("exit_code", 1))
 
 
 def _prepare_campaign_master(args: argparse.Namespace) -> dict[str, Any]:
@@ -357,40 +298,27 @@ def _prepare_campaign_master(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _run_campaign_batch(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    binding = load_and_validate_batch_request(args.batch_request)
-    request = binding["request"]
     output = reject_symlink_path_components(
         args.output, label="output directory"
     ).resolve(strict=False)
-    work_value = args.work if args.work else output / ".work"
-    work = reject_symlink_path_components(
-        work_value, label="work directory"
-    ).resolve(strict=False)
-    max_parallel = resolve_max_parallel(args.max_parallel)
-    if not 1 <= args.max_cases_per_shard <= 256:
-        raise ValueError("--max-cases-per-shard must be between 1 and 256")
-    prepared = prepare_portable_run(
-        run_dir=output,
-        run_id=str(request["execution_run_id"]),
-        generation_id=str(request["execution_generation_id"]),
-        profile="standalone",
-        adapter="ssqtl",
-        runtime_identity_path=_embedded_runtime_manifest(),
-        batch_request=binding["request_path"],
+    if args.resume:
+        _resume_identity(output)
+    return run_project_workflow(
+        project=None,
+        batch_request=args.batch_request,
+        output=output,
+        work=args.work,
+        resume=args.resume,
+        max_parallel=args.max_parallel,
         max_cases_per_shard=args.max_cases_per_shard,
-        max_parallel=max_parallel,
-        resume=args.resume,
+        runtime_manifest=_embedded_runtime_manifest(),
+        igv_cpus=args.igv_cpus,
+        igv_memory=args.igv_memory,
+        igv_timeout=args.igv_timeout,
+        normalization_cpus=args.normalization_cpus,
+        normalization_memory=args.normalization_memory,
+        normalization_timeout=args.normalization_timeout,
     )
-    result = execute_portable_run(
-        prepared,
-        profile="standalone",
-        runtime_identity_path=_embedded_runtime_manifest(),
-        nextflow=None,
-        work_dir=work,
-        resume=args.resume,
-        max_parallel=max_parallel,
-    )
-    return result, int(result.get("exit_code", 1))
 
 
 def _publish(args: argparse.Namespace) -> dict[str, Any]:

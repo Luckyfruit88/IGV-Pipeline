@@ -11,8 +11,9 @@ def create_bounded_shards(
     output_dir: str | Path,
     *,
     max_cases_per_shard: int = 256,
+    relative_paths: bool = False,
 ) -> dict[str, Any]:
-    """Create deterministic, ordered shards with an explicit hard case bound."""
+    """Create deterministic logical groups without controlling task scheduling."""
 
     if not 1 <= int(max_cases_per_shard) <= 256:
         raise ValueError("max_cases_per_shard must be between 1 and 256")
@@ -44,17 +45,17 @@ def create_bounded_shards(
                 "last_manifest_order": int(subset[-1]["manifest_order"]),
                 "case_count": len(subset),
                 "task_ids": [str(task["task_id"]) for task in subset],
-                "path": str(path),
+                "path": f"shards/{path.name}" if relative_paths else str(path),
                 "sha256": sha256_file(path),
             }
         )
     plan = {
         "schema_version": "3.0",
-        "source_tasks": str(source),
+        "source_tasks": "contract/tasks.jsonl" if relative_paths else str(source),
         "source_sha256": sha256_file(source),
         "case_count": len(tasks),
         "max_cases_per_shard": int(max_cases_per_shard),
-        "active_shard_limit": 1,
+        "scheduling_role": "LOGICAL_ONLY",
         "shard_count": len(rows),
         "shards": rows,
     }

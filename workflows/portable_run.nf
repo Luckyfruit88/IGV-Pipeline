@@ -1,4 +1,5 @@
 include { RUN_PORTABLE_CASE } from '../modules/local/run_portable_case'
+include { RESOLVE_EXECUTION_POLICY } from '../modules/local/resolve_execution_policy'
 include { VALIDATE_RUNTIME_IDENTITY } from '../modules/local/validate_runtime_identity'
 
 
@@ -32,7 +33,8 @@ workflow PORTABLE_RUN {
         if (hostUid.toLong() > 2147483647L || hostGid.toLong() > 2147483647L) {
             error('docker host_uid/host_gid exceed the supported POSIX ID limit')
         }
-    } else if (hostUid || hostGid) {
+    }
+    else if (hostUid || hostGid) {
         error('host_uid and host_gid are valid only with the docker profile')
     }
     if (!(manifestSha ==~ /[a-f0-9]{64}/)) {
@@ -54,7 +56,6 @@ workflow PORTABLE_RUN {
         error('advanced runtime_image must match its automatically observed OCI digest')
     }
 
-    def taskManifest = file(params.canonical_tasks, checkIfExists: true)
     def workerScript = file("${projectDir}/src/ssqtl_igv/v3_worker.py", checkIfExists: true)
     def runtimeConfig = file("${projectDir}/src/ssqtl_igv/resources/v3-runtime.yaml", checkIfExists: true)
     def runtimeManifest = file(params.runtime_manifest, checkIfExists: true)
@@ -68,7 +69,24 @@ workflow PORTABLE_RUN {
         file("${projectDir}/containers/materials.lock.json", checkIfExists: true),
     ]
     def identityValidator = file("${projectDir}/bin/validate_runtime_identity.py", checkIfExists: true)
+    def policyResolver = file("${projectDir}/bin/resolve_execution_policy.py", checkIfExists: true)
     def schemaDirectory = file(params.schema_dir, checkIfExists: true)
+
+    RESOLVE_EXECUTION_POLICY(
+        policyResolver,
+        executionMode,
+        params.max_parallel,
+        params.igv_cpus,
+        params.igv_memory,
+        params.igv_timeout,
+        params.normalization_cpus,
+        params.normalization_memory,
+        params.normalization_timeout,
+    )
+    executionPolicy = RESOLVE_EXECUTION_POLICY.out.policy.first()
+    executionPolicyDoc = executionPolicy
+        .map { policyPath -> policyPath.text }
+        .first()
 
     VALIDATE_RUNTIME_IDENTITY(
         runtimeManifest,
@@ -83,12 +101,29 @@ workflow PORTABLE_RUN {
         runtimeSifSha,
     )
     runtimeValidation = VALIDATE_RUNTIME_IDENTITY.out.bundle.first()
+    runtimeValidationIdentity = runtimeValidation.map { bundle ->
+        def validation = new groovy.json.JsonSlurperClassic().parse(
+            bundle.resolve('validation.json').toFile()
+        )
+        if (!(validation.status in ['PASS', 'STUB'])) {
+            error('runtime manifest validation is neither PASS nor a Nextflow stub')
+        }
+        groovy.json.JsonOutput.toJson([
+            schema_version: validation.schema_version,
+            status: validation.status,
+            runtime_manifest_sha256: validation.runtime_manifest_sha256,
+            runtime_fingerprint_sha256: validation.runtime_fingerprint_sha256,
+            materials_sha256: validation.materials_sha256,
+            runtime_config_sha256: validation.runtime_config_sha256,
+            observed_provenance: validation.observed_provenance,
+        ])
+    }
 
     tasks = channel.fromPath(params.canonical_tasks, checkIfExists: true)
         .splitText()
         .filter { line -> line.trim() }
         .map { line ->
-            def task = new groovy.json.JsonSlurper().parseText(line)
+            def task = new groovy.json.JsonSlurperClassic().parseText(line)
             def stagedInputs = []
             if (task.core.preflight.state == 'READY') {
                 task.core.tracks.each { track ->
@@ -102,21 +137,22 @@ workflow PORTABLE_RUN {
                     stagedInputs << file(task.core.auxiliary.source_path.toString(), checkIfExists: true)
                 }
             }
-            tuple(task.task_id.toString(), task, stagedInputs)
+            tuple(task.task_id.toString(), line.trim(), stagedInputs)
         }
 
     RUN_PORTABLE_CASE(
         tasks,
-        taskManifest,
         workerScript,
         runtimeConfig,
         runtimeManifest,
         fingerprintSha,
-        runtimeValidation,
+        runtimeValidationIdentity,
+        executionPolicyDoc,
         schemaDirectory,
     )
 
     emit:
     case_bundles = RUN_PORTABLE_CASE.out.case_bundle
     runtime_manifest_validation = runtimeValidation
+    execution_policy = executionPolicy
 }

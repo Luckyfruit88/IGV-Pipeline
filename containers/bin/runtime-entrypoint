@@ -47,6 +47,15 @@ if [[ "$1" == "igv-snapshot" ]]; then
     fi
 fi
 
+if [[ "$1" == "nextflow" ]]; then
+    shift
+    (($# >= 1)) || fail "nextflow requires the run subcommand"
+    [[ "$1" == "run" ]] || fail "only the native nextflow run entrypoint is supported"
+    prepare_writable_runtime
+    /usr/local/bin/runtime-self-test >/dev/null
+    exec /usr/local/bin/nextflow "$@"
+fi
+
 case "$1" in
     doctor|run|review|publish|campaign)
         prepare_writable_runtime

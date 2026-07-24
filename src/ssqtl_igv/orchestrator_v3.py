@@ -173,7 +173,7 @@ def _scc_site_adapter_contract(project: str, qname: str | None) -> dict[str, Any
         "project": project,
         "qname": qname,
         "cluster_options": cluster_options,
-        "active_shard_limit": 1,
+        "scheduling_role": "LEGACY_SGE_SHARD_LIMIT",
         "portable_render_max_forks": 8,
         "max_cases_per_shard_limit": 256,
     }
@@ -2103,6 +2103,8 @@ def _run_nextflow_shard(
         "true",
         "--session_output",
         str(session),
+        "--publish_intermediate_case_outputs",
+        "true",
     ]
     if runtime_image:
         command.extend(["--runtime_image", runtime_image])
@@ -2875,7 +2877,7 @@ def execute_portable_run(
         )
         site_adapter = None
         if profile == "scc":
-            if plan.get("active_shard_limit") != 1 or int(
+            if plan.get("scheduling_role") != "LOGICAL_ONLY" or int(
                 plan.get("max_cases_per_shard", 257)
             ) > 256:
                 raise ValueError("SCC shard bounds differ from the fixed v3 control contract")
