@@ -113,6 +113,18 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert "USER 65532:65532" in dockerfile
 
 
+def test_contract_ci_uses_the_checksum_pinned_nextflow_launcher() -> None:
+    workflow = _text(".github/workflows/ci.yml")
+
+    assert "NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar" in workflow
+    assert "NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher" in workflow
+    assert "a57f804243c6fa3b1e3194ab05a054f7799b5d4423049b62bbb171530dba9fe2" in workflow
+    assert 'chmod 0555 "${NXF_LAUNCHER}"' in workflow
+    assert '"${NXF_LAUNCHER}" lint .' in workflow
+    assert workflow.count('"${NXF_LAUNCHER}" run .') == 3
+    assert "java -jar" not in workflow
+
+
 def test_runtime_entrypoint_self_tests_only_execution_capable_commands() -> None:
     entrypoint = _text("containers/bin/runtime-entrypoint")
 

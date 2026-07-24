@@ -16,6 +16,11 @@ jobs:
   contracts:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar
+      NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher
+      NXF_VER: "25.04.7"
+      NXF_OFFLINE: "true"
     steps:
       - name: Check out the candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,14 +51,21 @@ jobs:
       - name: Verify and run Nextflow 25.04.7 lint
         env:
           NEXTFLOW_JAR_SHA256: 231a3c0fc7bae88add57ab420e9c6306ee35ff87b6af356cd2d8aa56347472f3
+          NEXTFLOW_LAUNCHER_SHA256: a57f804243c6fa3b1e3194ab05a054f7799b5d4423049b62bbb171530dba9fe2
           NXF_HOME: ${{ runner.temp }}/nextflow-home
         run: |
           curl --fail --location --silent --show-error \
-            --output "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" \
+            --output "${NXF_BIN}" \
             https://www.nextflow.io/releases/v25.04.7/nextflow-25.04.7-one.jar
+          curl --fail --location --silent --show-error \
+            --output "${NXF_LAUNCHER}" \
+            https://www.nextflow.io/releases/v25.04.7/nextflow
           printf '%s  %s\n' "${NEXTFLOW_JAR_SHA256}" \
-            "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" | sha256sum --check --strict
-          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" lint .
+            "${NXF_BIN}" | sha256sum --check --strict
+          printf '%s  %s\n' "${NEXTFLOW_LAUNCHER_SHA256}" \
+            "${NXF_LAUNCHER}" | sha256sum --check --strict
+          chmod 0555 "${NXF_LAUNCHER}"
+          "${NXF_LAUNCHER}" lint .
 
       - name: Run the native PROJECT_RUN stub, fake runtime, and resume contract
         env:
@@ -74,7 +86,7 @@ jobs:
             --runtime-config src/ssqtl_igv/resources/v3-runtime.yaml \
             --output "${runtime_manifest}"
 
-          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" run . \
+          "${NXF_LAUNCHER}" run . \
             -profile test \
             -stub-run \
             -work-dir "${native_root}/stub-work" \
@@ -88,7 +100,7 @@ jobs:
             --enable_reports true
           test -f "${native_root}/stub-output/run_summary.json"
 
-          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" run . \
+          "${NXF_LAUNCHER}" run . \
             -profile test \
             -work-dir "${native_root}/work" \
             --project "${native_root}/fixture/project/project.yaml" \
@@ -100,7 +112,7 @@ jobs:
             --max_parallel auto \
             --fake_runtime true \
             --enable_reports true
-          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" run . \
+          "${NXF_LAUNCHER}" run . \
             -profile test \
             -resume \
             -work-dir "${native_root}/work" \
