@@ -1,8 +1,20 @@
+def ssqtlNormalizationPolicy(policyDocument) {
+    return new groovy.json.JsonSlurperClassic()
+        .parseText(policyDocument.toString())
+        .normalization
+}
+
+
 process NORMALIZE_SSQTL_V3 {
     tag "${run_id}:${generation_id}"
     label 'portable_runtime'
-    label 'prepare'
-    cache false
+    label 'adaptive_normalization'
+    cache 'deep'
+    cpus { ssqtlNormalizationPolicy(execution_policy_doc).cpus as int }
+    memory { "${ssqtlNormalizationPolicy(execution_policy_doc).memory_bytes} B" }
+    time { "${ssqtlNormalizationPolicy(execution_policy_doc).timeout_seconds} sec" }
+    errorStrategy 'terminate'
+    maxRetries 0
 
     publishDir "${params.ssqtl_normalization_output}", mode: 'copy', overwrite: false
 
@@ -17,8 +29,11 @@ process NORMALIZE_SSQTL_V3 {
     val reference
     val adapter_config
     path bind_contract, stageAs: 'contract/ssqtl_bind_contract.json'
+    path source_binding, stageAs: 'contract/source_binding.json'
     path runtime_validation, stageAs: 'contract/runtime-manifest-validation'
     val runtime_fingerprint_sha256
+    path execution_policy, stageAs: 'contract/execution_policy.json'
+    val execution_policy_doc
 
     output:
     path 'normalization_bundle', emit: bundle
@@ -31,6 +46,7 @@ process NORMALIZE_SSQTL_V3 {
     export LANG=C.UTF-8
     export IGV_RUNTIME_FINGERPRINT_SHA256='${runtime_fingerprint_sha256}'
     test -s '${bind_contract}'
+    test -s '${source_binding}'
     '${params.python}' -m ssqtl_igv.ssqtl_adapter_v3 \
         --associations '${associations}' \
         --rds-dir '${rds_dir}' \

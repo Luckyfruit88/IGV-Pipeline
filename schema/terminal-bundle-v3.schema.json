@@ -17,7 +17,8 @@
     "task_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
     "manifest_order": {"type": "integer", "minimum": 1},
     "input_fingerprint": {"$ref": "#/$defs/sha256"},
-    "status": {"enum": ["SUCCEEDED", "DOMAIN_FAILED"]},
+    "status": {"enum": ["SUCCEEDED", "DOMAIN_FAILED", "RESOURCE_EXHAUSTED"]},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
     "case_result_sha256": {"$ref": "#/$defs/sha256"},
     "case_result_size": {"type": "integer", "minimum": 1},
     "artifact_set_sha256": {"$ref": "#/$defs/sha256"}

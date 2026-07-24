@@ -62,7 +62,8 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert "IGV_SNAPSHOT_PIPELINE_DIR=/opt/igv-pipeline/pipeline" in dockerfile
     assert "IGV_RUNTIME_MANIFEST=/opt/igv-pipeline/runtime-manifest.json" in dockerfile
     assert 'igv_java_home="${IGV_JAVA_HOME:-${igv_root}/jdk-11}"' in igv_wrapper
-    assert "-Xmx6g" in igv_wrapper
+    assert 'igv_heap="${IGV_HEAP:-6g}"' in igv_wrapper
+    assert '-Xmx"${igv_heap}"' in igv_wrapper
     assert "/opt/java-21" in nextflow_wrapper
     assert "nextflow-25.04.7-one.jar" in nextflow_wrapper
     assert "nextflow-25.04.7-launcher" in nextflow_wrapper
@@ -80,6 +81,9 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert 'init|import-v2)' in entrypoint
     assert '--help|-h|--version)' in entrypoint
     assert 'exec "${cli}" "$@"' in entrypoint
+    assert '[[ "$1" == "nextflow" ]]' in entrypoint
+    assert '[[ "$1" == "run" ]]' in entrypoint
+    assert 'exec /usr/local/bin/nextflow "$@"' in entrypoint
     assert '[[ "$1" == "/bin/bash" ]]' in entrypoint
     assert '[[ "$(id -u)" != 0 ]]' in entrypoint
     assert '[[ "$1" == "run" ||' in entrypoint
@@ -109,13 +113,19 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert "USER 65532:65532" in dockerfile
 
 
-def test_runtime_entrypoint_self_tests_only_execution_capable_campaign_commands() -> None:
+def test_runtime_entrypoint_self_tests_only_execution_capable_commands() -> None:
     entrypoint = _text("containers/bin/runtime-entrypoint")
 
-    assert entrypoint.count("/usr/local/bin/runtime-self-test >/dev/null") == 1
+    assert entrypoint.count("/usr/local/bin/runtime-self-test >/dev/null") == 2
+    nextflow_condition = entrypoint[
+        entrypoint.index('if [[ "$1" == "nextflow"')
+        : entrypoint.index('case "$1" in')
+    ]
+    assert '[[ "$1" == "run" ]]' in nextflow_condition
+    assert 'exec /usr/local/bin/nextflow "$@"' in nextflow_condition
     condition = entrypoint[
         entrypoint.index('if [[ "$1" == "run"')
-        : entrypoint.index("/usr/local/bin/runtime-self-test >/dev/null")
+        : entrypoint.rindex("/usr/local/bin/runtime-self-test >/dev/null")
     ]
     assert '"${2:-}" == "prepare-master"' in condition
     assert '"${2:-}" == "run-batch"' in condition

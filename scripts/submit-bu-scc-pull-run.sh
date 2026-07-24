@@ -2,9 +2,6 @@
 set -euo pipefail
 
 readonly JOB_NAME="igv-snapshot-v3"
-readonly SLOT_COUNT="8"
-readonly MEMORY_PER_CORE="8G"
-readonly WALL_CLOCK_LIMIT="04:00:00"
 
 usage() {
     cat >&2 <<'EOF'
@@ -23,11 +20,14 @@ Without --batch-request, the normal /project/project.yaml pull-and-run mode is
 unchanged. With --batch-request, the immutable campaign root is additionally
 bound read-only and the validated request is executed with campaign run-batch.
 
-The site JSON contains four fields:
+The site JSON contains seven required fields:
   project  required SGE project token
   qname    optional SGE queue token or null
   pe       required SGE parallel-environment token
   engine   "apptainer" or "singularity"
+  slots    integer from 1 through 8
+  memory_per_slot  positive GiB value such as "8GiB"
+  walltime SGE wall clock limit in HH:MM:SS form
 
 Project, output, and SIF paths must be absolute paths visible from compute
 nodes. The project directory must contain a regular project.yaml file, and the
@@ -120,9 +120,17 @@ except (OSError, UnicodeError, json.JSONDecodeError) as exc:
 
 if not isinstance(value, dict):
     raise SystemExit("invalid BU SCC site config: root must be an object")
-allowed = {"project", "qname", "pe", "engine"}
+allowed = {
+    "project",
+    "qname",
+    "pe",
+    "engine",
+    "slots",
+    "memory_per_slot",
+    "walltime",
+}
 unknown = sorted(set(value) - allowed)
-missing = sorted({"project", "pe", "engine"} - set(value))
+missing = sorted(allowed - set(value))
 if unknown:
     raise SystemExit(f"invalid BU SCC site config: unknown fields: {unknown}")
 if missing:
@@ -144,11 +152,66 @@ engine = value.get("engine")
 if engine not in {"apptainer", "singularity"}:
     raise SystemExit("invalid BU SCC site config: engine must be apptainer or singularity")
 
-print("|".join((value["project"], qname, value["pe"], engine)))
+slots = value.get("slots")
+if isinstance(slots, bool) or not isinstance(slots, int) or not 1 <= slots <= 8:
+    raise SystemExit("invalid BU SCC site config: slots must be an integer from 1 through 8")
+
+memory_per_slot = value.get("memory_per_slot")
+if not isinstance(memory_per_slot, str):
+    raise SystemExit(
+        "invalid BU SCC site config: memory_per_slot must be a positive GiB value"
+    )
+memory_match = re.fullmatch(r"([1-9][0-9]{0,3})GiB", memory_per_slot)
+if memory_match is None:
+    raise SystemExit(
+        "invalid BU SCC site config: memory_per_slot must be a positive GiB value"
+    )
+memory_per_slot_sge = f"{int(memory_match.group(1))}G"
+
+walltime = value.get("walltime")
+if not isinstance(walltime, str):
+    raise SystemExit(
+        "invalid BU SCC site config: walltime must use HH:MM:SS"
+    )
+walltime_match = re.fullmatch(r"([0-9]{2,3}):([0-5][0-9]):([0-5][0-9])", walltime)
+if walltime_match is None or int(walltime_match.group(1)) == 0:
+    raise SystemExit(
+        "invalid BU SCC site config: walltime must use a positive HH:MM:SS value"
+    )
+
+print(
+    "|".join(
+        (
+            value["project"],
+            qname,
+            value["pe"],
+            engine,
+            str(slots),
+            memory_per_slot,
+            memory_per_slot_sge,
+            walltime,
+        )
+    )
+)
 ' "${site_config}")" || exit 2
 
-IFS='|' read -r sge_project qname parallel_environment container_engine <<<"${site_values}"
-[[ -n "${sge_project}" && -n "${parallel_environment}" && -n "${container_engine}" ]] || \
+IFS='|' read -r \
+    sge_project \
+    qname \
+    parallel_environment \
+    container_engine \
+    slot_count \
+    memory_per_slot \
+    memory_per_slot_sge \
+    wall_clock_limit \
+    <<<"${site_values}"
+[[ -n "${sge_project}" && \
+   -n "${parallel_environment}" && \
+   -n "${container_engine}" && \
+   -n "${slot_count}" && \
+   -n "${memory_per_slot}" && \
+   -n "${memory_per_slot_sge}" && \
+   -n "${wall_clock_limit}" ]] || \
     fail "site config parser returned an incomplete value"
 
 canonical_existing_path() {
@@ -254,6 +317,9 @@ container_command=(
     --no-home
     --net
     --network none
+    --env "IGV_SCC_SLOTS=${slot_count}"
+    --env "IGV_SCC_MEMORY_PER_SLOT=${memory_per_slot}"
+    --env "IGV_SCC_WALLTIME=${wall_clock_limit}"
     --bind "${project_dir}:/project:ro"
     --bind "${output_dir}:/output:rw"
 )
@@ -265,13 +331,13 @@ if [[ -n "${batch_request_arg}" ]]; then
         run-batch
         --batch-request "${container_batch_request}"
         --output /output
-        --max-parallel "${SLOT_COUNT}"
+        --max-parallel auto
     )
 else
     container_command+=(
         "${sif_path}"
         run
-        --max-parallel "${SLOT_COUNT}"
+        --max-parallel auto
     )
 fi
 if [[ "${resume}" == true ]]; then
@@ -288,9 +354,9 @@ if [[ -n "${qname}" ]]; then
     qsub_command+=(-q "${qname}")
 fi
 qsub_command+=(
-    -pe "${parallel_environment}" "${SLOT_COUNT}"
-    -l "mem_per_core=${MEMORY_PER_CORE}"
-    -l "h_rt=${WALL_CLOCK_LIMIT}"
+    -pe "${parallel_environment}" "${slot_count}"
+    -l "mem_per_core=${memory_per_slot_sge}"
+    -l "h_rt=${wall_clock_limit}"
     -j y
     -b y
     "${container_command[@]}"

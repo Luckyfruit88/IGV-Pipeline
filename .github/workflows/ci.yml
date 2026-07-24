@@ -55,6 +55,67 @@ jobs:
             "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" | sha256sum --check --strict
           java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" lint .
 
+      - name: Run the native PROJECT_RUN stub, fake runtime, and resume contract
+        env:
+          NXF_HOME: ${{ runner.temp }}/native-nextflow-home
+          NXF_ANSI_LOG: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_root="${RUNNER_TEMP}/native-project-run"
+          runtime_manifest="${native_root}/runtime-manifest.json"
+          python_bin="$(command -v python)"
+          mkdir -p "${native_root}/fixture"
+          python tests/nextflow/build_project_fixture_v3.py "${native_root}/fixture"
+          python bin/create_runtime_manifest.py \
+            --source-commit "${GITHUB_SHA}" \
+            --source-tree "$(git rev-parse 'HEAD^{tree}')" \
+            --materials-lock containers/runtime-materials.lock.json \
+            --runtime-config src/ssqtl_igv/resources/v3-runtime.yaml \
+            --output "${runtime_manifest}"
+
+          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" run . \
+            -profile test \
+            -stub-run \
+            -work-dir "${native_root}/stub-work" \
+            --project "${native_root}/fixture/project/project.yaml" \
+            --output "${native_root}/stub-output" \
+            --session_output "${native_root}/stub-output/reports" \
+            --runtime_manifest "${runtime_manifest}" \
+            --python "${python_bin}" \
+            --igv_memory 4GiB \
+            --max_parallel auto \
+            --enable_reports true
+          test -f "${native_root}/stub-output/run_summary.json"
+
+          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" run . \
+            -profile test \
+            -work-dir "${native_root}/work" \
+            --project "${native_root}/fixture/project/project.yaml" \
+            --output "${native_root}/output" \
+            --session_output "${native_root}/output/reports" \
+            --runtime_manifest "${runtime_manifest}" \
+            --python "${python_bin}" \
+            --igv_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          java -jar "${RUNNER_TEMP}/nextflow-25.04.7-one.jar" run . \
+            -profile test \
+            -resume \
+            -work-dir "${native_root}/work" \
+            --project "${native_root}/fixture/project/project.yaml" \
+            --output "${native_root}/output" \
+            --session_output "${native_root}/output/reports" \
+            --runtime_manifest "${runtime_manifest}" \
+            --python "${python_bin}" \
+            --igv_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          python tests/nextflow/verify_project_run_v3.py \
+            "${native_root}/output" --expected-cases 2 --require-cached
+
       - name: Reject malformed patches
         shell: bash
         run: |

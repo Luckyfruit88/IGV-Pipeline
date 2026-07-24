@@ -14,7 +14,6 @@
     "adapter_id",
     "core",
     "adapter_data",
-    "estimated_runtime_seconds",
     "input_fingerprint"
   ],
   "properties": {
@@ -32,7 +31,6 @@
         {"$ref": "#/$defs/ssqtlAdapter"}
       ]
     },
-    "estimated_runtime_seconds": {"type": "number", "exclusiveMinimum": 0},
     "input_fingerprint": {"$ref": "#/$defs/sha256"}
   },
   "allOf": [
@@ -212,7 +210,6 @@
         "screen_depth",
         "igv_version",
         "igv_java_version",
-        "igv_heap_gb",
         "locale",
         "font_contract_id",
         "command_listener_enabled",
@@ -227,7 +224,6 @@
         "screen_depth": {"type": "integer", "minimum": 1},
         "igv_version": {"type": "string", "minLength": 1},
         "igv_java_version": {"type": "string", "minLength": 1},
-        "igv_heap_gb": {"type": "number", "exclusiveMinimum": 0},
         "locale": {"type": "string", "minLength": 1},
         "font_contract_id": {"type": "string", "minLength": 1},
         "command_listener_enabled": {"const": false},

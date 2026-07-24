@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Luckyfruit88/IGV-Pipeline/schema/execution-policy-v3.schema.json",
+  "title": "IGV Pipeline deterministic execution policy 3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "execution_mode",
+    "resource_envelope",
+    "concurrency",
+    "render",
+    "normalization",
+    "execution_policy_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0-execution-policy"},
+    "execution_mode": {"enum": ["standalone", "docker", "scc", "test"]},
+    "resource_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu_slots",
+        "memory_bytes",
+        "memory_reserve_bytes",
+        "usable_memory_bytes",
+        "memory_detection_reliable",
+        "cpu_observations",
+        "memory_observations",
+        "scc_allocation"
+      ],
+      "properties": {
+        "cpu_slots": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": ["integer", "null"], "minimum": 1},
+        "memory_reserve_bytes": {"type": ["integer", "null"], "minimum": 1},
+        "usable_memory_bytes": {"type": ["integer", "null"], "minimum": 1},
+        "memory_detection_reliable": {"type": "boolean"},
+        "cpu_observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "slots"],
+            "properties": {
+              "source": {"type": "string", "minLength": 1},
+              "slots": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "memory_observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "bytes"],
+            "properties": {
+              "source": {"type": "string", "minLength": 1},
+              "bytes": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "scc_allocation": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "slots",
+                "memory_per_slot_bytes",
+                "total_memory_bytes",
+                "walltime_seconds"
+              ],
+              "properties": {
+                "slots": {"type": "integer", "minimum": 1},
+                "memory_per_slot_bytes": {"type": "integer", "minimum": 1},
+                "total_memory_bytes": {"type": "integer", "minimum": 1},
+                "walltime_seconds": {"type": "integer", "minimum": 1}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "concurrency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested",
+        "hard_max",
+        "cpu_capacity",
+        "memory_capacity",
+        "effective_max_parallel"
+      ],
+      "properties": {
+        "requested": {"type": "string", "pattern": "^(auto|[1-8])$"},
+        "hard_max": {"const": 8},
+        "cpu_capacity": {"type": "integer", "minimum": 1},
+        "memory_capacity": {"type": "integer", "minimum": 1},
+        "effective_max_parallel": {"type": "integer", "minimum": 1, "maximum": 8}
+      }
+    },
+    "render": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_retries",
+        "retry_worker_exit_code",
+        "retry_exit_statuses",
+        "retryable_failure_classes",
+        "attempts"
+      ],
+      "properties": {
+        "max_retries": {"const": 2},
+        "retry_worker_exit_code": {"const": 75},
+        "retry_exit_statuses": {
+          "type": "array",
+          "prefixItems": [{"const": 75}, {"const": 137}, {"const": 143}],
+          "items": false
+        },
+        "retryable_failure_classes": {
+          "type": "array",
+          "prefixItems": [{"const": "OOM"}, {"const": "TIMEOUT"}],
+          "items": false
+        },
+        "attempts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"$ref": "#/$defs/renderAttempt"}
+        }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpus",
+        "memory_bytes",
+        "timeout_seconds",
+        "max_retries",
+        "error_strategy"
+      ],
+      "properties": {
+        "cpus": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "max_retries": {"const": 0},
+        "error_strategy": {"const": "terminate"}
+      }
+    },
+    "execution_policy_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "renderAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt",
+        "cpus",
+        "memory_bytes",
+        "timeout_seconds",
+        "igv_heap_bytes",
+        "igv_heap_argument"
+      ],
+      "properties": {
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
+        "cpus": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "igv_heap_bytes": {"type": "integer", "minimum": 1},
+        "igv_heap_argument": {"type": "string", "pattern": "^[1-9][0-9]*[gm]$"}
+      }
+    }
+  }
+}

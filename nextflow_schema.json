@@ -7,6 +7,21 @@
   "properties": {
     "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
     "generation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
+    "project": {
+      "type": ["string", "null"],
+      "format": "file-path",
+      "description": "Schema 3.0 project.yaml. Mutually exclusive with batch_request; defaults to /project/project.yaml when neither is provided."
+    },
+    "batch_request": {
+      "type": ["string", "null"],
+      "format": "file-path",
+      "description": "Immutable campaign batch-request.json. Mutually exclusive with project."
+    },
+    "output": {
+      "type": "string",
+      "format": "directory-path",
+      "default": "/output"
+    },
     "params_file": {
       "type": "string",
       "format": "file-path",
@@ -26,7 +41,19 @@
     "expected_case_count": {"type": ["integer", "null"], "minimum": 1},
     "estimated_seconds_per_case": {"type": "number", "exclusiveMinimum": 0, "default": 90},
     "max_cases_per_shard": {"type": "integer", "minimum": 1, "maximum": 256, "default": 256},
-    "max_parallel": {"type": "integer", "minimum": 1, "maximum": 8, "default": 1},
+    "max_parallel": {
+      "oneOf": [
+        {"const": "auto"},
+        {"type": "integer", "minimum": 1, "maximum": 8}
+      ],
+      "default": "auto"
+    },
+    "igv_cpus": {"type": "integer", "minimum": 1, "default": 1},
+    "igv_memory": {"type": "string", "pattern": "^[0-9]+(?:[.][0-9]+)?(?:B|KB|KiB|MB|MiB|GB|GiB|TB|TiB)$", "default": "8GiB"},
+    "igv_timeout": {"type": "string", "pattern": "^[0-9]+(?:[.][0-9]+)?(?:s|m|h|d)$", "default": "30m"},
+    "normalization_cpus": {"type": "integer", "minimum": 1, "default": 1},
+    "normalization_memory": {"type": "string", "pattern": "^[0-9]+(?:[.][0-9]+)?(?:B|KB|KiB|MB|MiB|GB|GiB|TB|TiB)$", "default": "12GiB"},
+    "normalization_timeout": {"type": "string", "pattern": "^[0-9]+(?:[.][0-9]+)?(?:s|m|h|d)$", "default": "36h"},
     "shard_score_budget": {"type": "number", "exclusiveMinimum": 0, "default": 23040},
     "plan_output": {"type": "string", "format": "directory-path"},
     "shard_manifest": {"type": "string", "format": "file-path"},
@@ -128,7 +155,8 @@
     },
     "enable_reports": {"type": "boolean", "default": false},
     "fake_runtime": {"type": "boolean", "default": false},
-    "session_output": {"type": "string", "default": "session"},
+    "session_output": {"type": ["string", "null"]},
+    "publish_intermediate_case_outputs": {"type": "boolean", "default": false},
     "skip_qacct": {"type": "boolean", "default": false}
   },
   "allOf": [

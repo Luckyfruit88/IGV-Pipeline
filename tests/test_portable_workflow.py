@@ -891,8 +891,18 @@ taskid {task}
             "igv-snapshot publish",
             "igv-snapshot import-v2",
             "docker pull ghcr.io/luckyfruit88/igv-pipeline:3.0.0",
+            "nextflow run Luckyfruit88/IGV-Pipeline",
+            "--max_parallel auto",
+            "--max_cases_per_shard 256",
+            "Stock `nextflow run`",
+            '"memory_per_slot": "8GiB"',
+            '"walltime": "04:00:00"',
         ):
             self.assertIn(token, readme)
+        self.assertIn("No public key, runtime sidecar, JRE approval", readme)
+        self.assertIn("不需要生产公钥、runtime sidecar、JRE 批准", readme)
+        self.assertIn("deterministic logical groups", readme)
+        self.assertIn("manifest、summary 和 campaign 逻辑分组", readme)
         self.assertIn("README.md#中文--chinese", pointer)
         self.assertNotIn("### 生产使用", pointer)
 

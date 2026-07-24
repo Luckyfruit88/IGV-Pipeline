@@ -70,7 +70,6 @@ DEFAULT_RENDER_POLICY: dict[str, Any] = {
     "screen_depth": 24,
     "igv_version": "2.16.2",
     "igv_java_version": "11",
-    "igv_heap_gb": 6,
     "locale": "C.UTF-8",
     "font_contract_id": "igv-v3-bundled-fonts-v1",
     "command_listener_enabled": False,
@@ -573,7 +572,6 @@ def normalize_generic_manifest(
                 "adapter_schema_version": "3.0-generic",
                 "scientific_interpretation": "NOT_APPLICABLE",
             },
-            "estimated_runtime_seconds": 90.0,
         }
         task["input_fingerprint"] = v3_task_fingerprint(task)
         validate_v3_task_document(task)
@@ -894,7 +892,6 @@ def native_ssqtl_task_from_prepared(
             "preparation_evidence": copy.deepcopy(dict(preparation_evidence)),
             "shard_hint": str(prepared["shard_hint"]),
         },
-        "estimated_runtime_seconds": float(prepared["estimated_runtime_seconds"]),
     }
     task["input_fingerprint"] = v3_task_fingerprint(task)
     validate_v3_task_document(task)
