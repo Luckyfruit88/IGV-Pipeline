@@ -17,8 +17,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar
-      NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher
       NXF_VER: "25.04.7"
       NXF_OFFLINE: "true"
     steps:
@@ -50,6 +48,8 @@ jobs:
 
       - name: Verify and run Nextflow 25.04.7 lint
         env:
+          NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar
+          NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher
           NEXTFLOW_JAR_SHA256: 231a3c0fc7bae88add57ab420e9c6306ee35ff87b6af356cd2d8aa56347472f3
           NEXTFLOW_LAUNCHER_SHA256: a57f804243c6fa3b1e3194ab05a054f7799b5d4423049b62bbb171530dba9fe2
           NXF_HOME: ${{ runner.temp }}/nextflow-home
@@ -69,6 +69,8 @@ jobs:
 
       - name: Run the native PROJECT_RUN stub, fake runtime, and resume contract
         env:
+          NXF_BIN: ${{ runner.temp }}/nextflow-25.04.7-one.jar
+          NXF_LAUNCHER: ${{ runner.temp }}/nextflow-25.04.7-launcher
           NXF_HOME: ${{ runner.temp }}/native-nextflow-home
           NXF_ANSI_LOG: "false"
         shell: bash
