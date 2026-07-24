@@ -31,7 +31,7 @@ process NORMALIZE_SSQTL_V3 {
     val normalization_output
     path bind_contract, stageAs: 'contract/ssqtl_bind_contract.json'
     path source_binding, stageAs: 'contract/source_binding.json'
-    path runtime_validation, stageAs: 'contract/runtime-manifest-validation'
+    val runtime_validation_identity
     val runtime_fingerprint_sha256
     path execution_policy, stageAs: 'contract/execution_policy.json'
     val execution_policy_doc
@@ -46,6 +46,7 @@ process NORMALIZE_SSQTL_V3 {
     export LC_ALL=C.UTF-8
     export LANG=C.UTF-8
     export IGV_RUNTIME_FINGERPRINT_SHA256='${runtime_fingerprint_sha256}'
+    test -n '${runtime_validation_identity}'
     test -s '${bind_contract}'
     test -s '${source_binding}'
     '${params.python}' -m ssqtl_igv.ssqtl_adapter_v3 \

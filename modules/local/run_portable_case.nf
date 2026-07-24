@@ -37,7 +37,7 @@ process RUN_PORTABLE_CASE {
     path runtime_config, stageAs: 'contract/v3-runtime.yaml'
     path runtime_manifest, stageAs: 'contract/runtime-manifest.json'
     val runtime_fingerprint_sha256
-    path runtime_validation, stageAs: 'contract/runtime-manifest-validation'
+    val runtime_validation_identity
     val execution_policy_doc
     path schema_directory, stageAs: 'schema'
 

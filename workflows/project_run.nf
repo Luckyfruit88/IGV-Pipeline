@@ -130,6 +130,26 @@ workflow PROJECT_RUN {
         params.runtime_sif_sha256?.toString()?.trim() ?: '',
     )
     runtimeValidation = VALIDATE_RUNTIME_IDENTITY.out.bundle
+    // The validation report is an observation and intentionally contains
+    // validated_at plus host paths.  Keep it as a user-facing report, but feed
+    // only its stable assertions into downstream cache identities.
+    runtimeValidationIdentity = runtimeValidation.map { bundle ->
+        def validation = new groovy.json.JsonSlurperClassic().parse(
+            bundle.resolve('validation.json').toFile()
+        )
+        if (validation.status != 'PASS') {
+            error('runtime manifest validation did not pass')
+        }
+        groovy.json.JsonOutput.toJson([
+            schema_version: validation.schema_version,
+            status: validation.status,
+            runtime_manifest_sha256: validation.runtime_manifest_sha256,
+            runtime_fingerprint_sha256: validation.runtime_fingerprint_sha256,
+            materials_sha256: validation.materials_sha256,
+            runtime_config_sha256: validation.runtime_config_sha256,
+            observed_provenance: validation.observed_provenance,
+        ])
+    }
 
     directEntries = entryRecords
         .filter { descriptor, _bundle -> !descriptor.normalization_required }
@@ -174,7 +194,7 @@ workflow PROJECT_RUN {
         ssqtlEntries.map { _descriptor, bundle ->
             bundle.resolve('project_binding.json')
         },
-        runtimeValidation,
+        runtimeValidationIdentity,
         runtimeFingerprint,
         executionPolicy,
         executionPolicyDoc,
@@ -240,7 +260,7 @@ workflow PROJECT_RUN {
         runtimeConfig,
         runtimeManifest,
         runtimeFingerprint,
-        runtimeValidation,
+        runtimeValidationIdentity,
         executionPolicyDoc,
         schemaDirectory,
     )

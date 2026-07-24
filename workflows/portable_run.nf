@@ -101,6 +101,23 @@ workflow PORTABLE_RUN {
         runtimeSifSha,
     )
     runtimeValidation = VALIDATE_RUNTIME_IDENTITY.out.bundle.first()
+    runtimeValidationIdentity = runtimeValidation.map { bundle ->
+        def validation = new groovy.json.JsonSlurperClassic().parse(
+            bundle.resolve('validation.json').toFile()
+        )
+        if (validation.status != 'PASS') {
+            error('runtime manifest validation did not pass')
+        }
+        groovy.json.JsonOutput.toJson([
+            schema_version: validation.schema_version,
+            status: validation.status,
+            runtime_manifest_sha256: validation.runtime_manifest_sha256,
+            runtime_fingerprint_sha256: validation.runtime_fingerprint_sha256,
+            materials_sha256: validation.materials_sha256,
+            runtime_config_sha256: validation.runtime_config_sha256,
+            observed_provenance: validation.observed_provenance,
+        ])
+    }
 
     tasks = channel.fromPath(params.canonical_tasks, checkIfExists: true)
         .splitText()
@@ -129,7 +146,7 @@ workflow PORTABLE_RUN {
         runtimeConfig,
         runtimeManifest,
         fingerprintSha,
-        runtimeValidation,
+        runtimeValidationIdentity,
         executionPolicyDoc,
         schemaDirectory,
     )
