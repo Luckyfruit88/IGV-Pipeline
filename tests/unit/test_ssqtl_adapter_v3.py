@@ -689,6 +689,8 @@ def test_ssqtl_preparation_is_policy_bound_and_fail_fast() -> None:
     assert "cache 'deep'" in module
     assert "errorStrategy 'terminate'" in module
     assert "maxRetries 0" in module
+    assert "val normalization_output" in module
+    assert "publishDir { normalization_output }" in module
     assert "path execution_policy" in module
     assert "NORMALIZE_SSQTL_V3" in workflow
     assert "VALIDATE_RUNTIME_IDENTITY" in workflow

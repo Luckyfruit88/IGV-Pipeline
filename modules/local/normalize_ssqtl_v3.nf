@@ -16,7 +16,7 @@ process NORMALIZE_SSQTL_V3 {
     errorStrategy 'terminate'
     maxRetries 0
 
-    publishDir "${params.ssqtl_normalization_output}", mode: 'copy', overwrite: false
+    publishDir { normalization_output }, mode: 'copy', overwrite: false
 
     input:
     val run_id
@@ -28,6 +28,7 @@ process NORMALIZE_SSQTL_V3 {
     val input_root
     val reference
     val adapter_config
+    val normalization_output
     path bind_contract, stageAs: 'contract/ssqtl_bind_contract.json'
     path source_binding, stageAs: 'contract/source_binding.json'
     path runtime_validation, stageAs: 'contract/runtime-manifest-validation'

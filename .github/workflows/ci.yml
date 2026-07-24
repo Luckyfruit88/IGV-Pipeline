@@ -172,3 +172,77 @@ jobs:
             --tmpfs /work:rw,nosuid,nodev,size=512m \
             --entrypoint runtime-self-test \
             igv-pipeline:ci
+
+      - name: Run raw ssQTL through the native project DAG
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="${RUNNER_TEMP}/native-ssqtl-project"
+          output_root="${RUNNER_TEMP}/native-ssqtl-output"
+          mkdir -p "${fixture_root}" "${output_root}"
+          python3 tests/nextflow/build_ssqtl_project_fixture_v3.py \
+            "${fixture_root}"
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --env HOME=/tmp \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --mount "type=bind,src=${fixture_root}/project,dst=/project" \
+            --mount "type=bind,src=${PWD}/tests/nextflow/build_ssqtl_assets_v3.R,dst=/fixture.R,readonly" \
+            --entrypoint Rscript \
+            igv-pipeline:ci \
+            /fixture.R /project
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --mount "type=bind,src=${fixture_root}/project,dst=/project,readonly" \
+            --mount "type=bind,src=${output_root},dst=/output" \
+            igv-pipeline:ci \
+            nextflow run /opt/igv-pipeline/pipeline \
+            -profile test \
+            -work-dir /output/.work \
+            --project /project/project.yaml \
+            --output /output \
+            --session_output /output/reports \
+            --python python3 \
+            --igv_memory 4GiB \
+            --normalization_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --mount "type=bind,src=${fixture_root}/project,dst=/project,readonly" \
+            --mount "type=bind,src=${output_root},dst=/output" \
+            igv-pipeline:ci \
+            nextflow run /opt/igv-pipeline/pipeline \
+            -profile test \
+            -resume \
+            -work-dir /output/.work \
+            --project /project/project.yaml \
+            --output /output \
+            --session_output /output/reports \
+            --python python3 \
+            --igv_memory 4GiB \
+            --normalization_memory 4GiB \
+            --max_parallel auto \
+            --fake_runtime true \
+            --enable_reports true
+          test -d "${output_root}/normalization/normalization_bundle"
+          test ! -e "${output_root}/null"
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --mount "type=bind,src=${PWD},dst=/source,readonly" \
+            --mount "type=bind,src=${output_root},dst=/output" \
+            --entrypoint python3 \
+            igv-pipeline:ci \
+            /source/tests/nextflow/verify_project_run_v3.py \
+            /output --expected-cases 1 --expected-adapter ssqtl --require-cached

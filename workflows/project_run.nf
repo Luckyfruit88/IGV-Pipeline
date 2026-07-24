@@ -39,7 +39,6 @@ workflow PROJECT_RUN {
     // execution authority; FINALIZE_CASES deliberately never opens trace.txt.
     params.output = outputRoot
     params.session_output = "${outputRoot}/reports"
-    params.ssqtl_normalization_output = "${outputRoot}/normalization"
 
     def runtimeManifestPath = params.runtime_manifest?.toString()?.trim() ?: '/opt/igv-pipeline/runtime-manifest.json'
     def runtimeManifest = file(runtimeManifestPath, checkIfExists: true)
@@ -165,6 +164,9 @@ workflow PROJECT_RUN {
         },
         ssqtlEntries.map { descriptor, _bundle ->
             descriptor.ssqtl.config?.toString() ?: ''
+        },
+        ssqtlEntries.map { _descriptor, _bundle ->
+            "${outputRoot}/normalization"
         },
         ssqtlEntries.map { _descriptor, bundle ->
             bundle.resolve('ssqtl_bind_contract.json')

@@ -79,6 +79,7 @@ workflow SSQTL_NORMALIZE {
         params.ssqtl_input_root.toString(),
         params.ssqtl_reference.toString(),
         (params.ssqtl_config ?: '').toString(),
+        params.ssqtl_normalization_output.toString(),
         bindContract,
         bindContract,
         runtimeValidation,
