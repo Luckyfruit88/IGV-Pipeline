@@ -458,13 +458,19 @@ def _validate_expected_roles(
             continue
         control_role = str(raw.get("control_role") or "")
         prepare_role = str(raw.get("prepare_role") or "")
+        execution_role = str(raw.get("execution_role") or "")
         case_id = str(raw.get("case_id") or "")
-        if sum(bool(value) for value in (control_role, prepare_role, case_id)) > 1:
+        if sum(
+            bool(value)
+            for value in (control_role, prepare_role, execution_role, case_id)
+        ) > 1:
             raise ValueError("accounting expected role/case bindings must be mutually exclusive")
         if control_role and control_role != "runtime_manifest_validation":
             raise ValueError(f"unsupported accounting control role: {control_role}")
         if prepare_role and prepare_role != "ssqtl_normalization":
             raise ValueError(f"unsupported accounting prepare role: {prepare_role}")
+        if execution_role and execution_role != "execution_policy":
+            raise ValueError(f"unsupported accounting execution role: {execution_role}")
 
 
 def _validated_prepare_receipts(
@@ -800,7 +806,12 @@ def _validate_case_coverage(
                 expected_by_trace[key] = raw
         role_aware = any(
             isinstance(raw, dict)
-            and (raw.get("case_id") or raw.get("control_role") or raw.get("prepare_role"))
+            and (
+                raw.get("case_id")
+                or raw.get("control_role")
+                or raw.get("prepare_role")
+                or raw.get("execution_role")
+            )
             for raw in expected_trace_rows
         )
         trace_cases: list[str] = []
@@ -809,7 +820,9 @@ def _validate_case_coverage(
                 (trace["task_id"], trace["process"], trace["hash"])
             )
             if role_aware and expected and (
-                expected.get("control_role") or expected.get("prepare_role")
+                expected.get("control_role")
+                or expected.get("prepare_role")
+                or expected.get("execution_role")
             ):
                 continue
             case_id = _trace_case_id(trace, expected)

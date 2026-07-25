@@ -24,6 +24,7 @@ from ssqtl_igv.accounting import (
 from ssqtl_igv.migration_v3 import import_v2_read_only
 from ssqtl_igv.orchestrator_v3 import (
     _terminal_execution_state,
+    _validate_ssqtl_normalization_trace,
     finalize_scc_run_accounting,
 )
 from ssqtl_igv.publication import (
@@ -88,6 +89,121 @@ def _qacct_record(
             "",
         )
     )
+
+
+def test_ssqtl_normalization_trace_requires_execution_policy_role(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "normalization.trace.tsv"
+    rows = [
+        (
+            "1",
+            "aa/111111",
+            "701",
+            "SSQTL_NORMALIZE:RESOLVE_EXECUTION_POLICY (execution-policy:standalone)",
+            "COMPLETED",
+            "0",
+        ),
+        (
+            "2",
+            "bb/222222",
+            "702",
+            "SSQTL_NORMALIZE:VALIDATE_RUNTIME_IDENTITY (standalone)",
+            "COMPLETED",
+            "0",
+        ),
+        (
+            "3",
+            "cc/333333",
+            "703",
+            "SSQTL_NORMALIZE:NORMALIZE_SSQTL_V3 (run_001:generation_001)",
+            "COMPLETED",
+            "0",
+        ),
+    ]
+    _write_trace(trace, rows)
+
+    selected = _validate_ssqtl_normalization_trace(
+        trace,
+        profile="scc",
+        run_id="run_001",
+        generation_id="generation_001",
+    )
+
+    assert set(selected) == {
+        "execution_policy",
+        "runtime_manifest_validation",
+        "ssqtl_normalization",
+    }
+    _write_trace(trace, rows[1:])
+    with pytest.raises(ValueError, match="exactly three tasks"):
+        _validate_ssqtl_normalization_trace(
+            trace,
+            profile="scc",
+            run_id="run_001",
+            generation_id="generation_001",
+        )
+
+
+def test_local_accounting_treats_execution_policy_as_non_case_role(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "trace.tsv"
+    _write_trace(
+        trace,
+        [
+            (
+                "1",
+                "aa/111111",
+                "-",
+                "PROJECT_RUN:RESOLVE_EXECUTION_POLICY (execution-policy:standalone)",
+                "COMPLETED",
+                "0",
+            ),
+            (
+                "2",
+                "bb/222222",
+                "-",
+                "PROJECT_RUN:RUN_PORTABLE_CASE (case_1)",
+                "COMPLETED",
+                "0",
+            ),
+        ],
+    )
+    terminal = _write_terminal_bundle(tmp_path / "terminal")
+    expected = [
+        {
+            "task_id": "1",
+            "process": "PROJECT_RUN:RESOLVE_EXECUTION_POLICY (execution-policy:standalone)",
+            "hash": "aa/111111",
+            "trace_file": str(trace.resolve()),
+            "execution_role": "execution_policy",
+        },
+        {
+            "task_id": "2",
+            "process": "PROJECT_RUN:RUN_PORTABLE_CASE (case_1)",
+            "hash": "bb/222222",
+            "trace_file": str(trace.resolve()),
+            "case_id": "case_1",
+        },
+    ]
+
+    report = collect_local_accounting(
+        [trace],
+        tmp_path / "accounting",
+        expected_tasks=expected,
+        expected_cases=[
+            {
+                "task_id": "case_1",
+                "manifest_order": 1,
+                "input_fingerprint": "f" * 64,
+            }
+        ],
+        terminal_bundles=[terminal],
+    )
+
+    assert report["status"] == "PASS"
+    assert report["trace_task_count"] == 2
 
 
 def _write_terminal_bundle(

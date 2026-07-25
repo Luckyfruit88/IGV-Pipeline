@@ -573,12 +573,14 @@ def _validate_ssqtl_normalization_trace(
     generation_id: str,
 ) -> dict[str, dict[str, str]]:
     rows = _nextflow_trace_rows(path, label="ssQTL normalization trace")
-    if len(rows) != 2:
-        raise ValueError("ssQTL normalization trace must contain exactly two tasks")
+    if len(rows) != 3:
+        raise ValueError("ssQTL normalization trace must contain exactly three tasks")
     selected: dict[str, dict[str, str]] = {}
     for row in rows:
         process = row["process"]
-        if "VALIDATE_RUNTIME_IDENTITY" in process or "VALIDATE_RUNTIME_MANIFEST" in process:
+        if "RESOLVE_EXECUTION_POLICY" in process:
+            role = "execution_policy"
+        elif "VALIDATE_RUNTIME_IDENTITY" in process or "VALIDATE_RUNTIME_MANIFEST" in process:
             role = "runtime_manifest_validation"
         elif "NORMALIZE_SSQTL_V3" in process:
             role = "ssqtl_normalization"
@@ -594,7 +596,11 @@ def _validate_ssqtl_normalization_trace(
         if profile == "scc" and row["native_id"].strip() in {"", "-"}:
             raise ValueError(f"SCC ssQTL normalization trace lacks native_id: {role}")
         selected[role] = row
-    if set(selected) != {"runtime_manifest_validation", "ssqtl_normalization"}:
+    if set(selected) != {
+        "execution_policy",
+        "runtime_manifest_validation",
+        "ssqtl_normalization",
+    }:
         raise ValueError("ssQTL normalization trace role set is incomplete")
     return selected
 
@@ -2288,8 +2294,12 @@ def _expected_ssqtl_normalization_trace_bindings(
         run_id=run_id,
         generation_id=generation_id,
     )
+    policy_row = trace_rows["execution_policy"]
     validation_row = trace_rows["runtime_manifest_validation"]
     prepare_row = trace_rows["ssqtl_normalization"]
+    base_policy = {
+        key: policy_row[key] for key in ("task_id", "process", "hash", "trace_file")
+    }
     base_validation = {
         key: validation_row[key] for key in ("task_id", "process", "hash", "trace_file")
     }
@@ -2297,6 +2307,10 @@ def _expected_ssqtl_normalization_trace_bindings(
         key: prepare_row[key] for key in ("task_id", "process", "hash", "trace_file")
     }
     return [trace.resolve(strict=True)], [
+        {
+            **base_policy,
+            "execution_role": "execution_policy",
+        },
         {
             **base_validation,
             "control_role": "runtime_manifest_validation",
