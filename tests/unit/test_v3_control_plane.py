@@ -145,6 +145,78 @@ def test_ssqtl_normalization_trace_requires_execution_policy_role(
         )
 
 
+def test_ssqtl_normalization_trace_uses_name_for_tag_and_process_for_role(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "normalization-real-fields.trace.tsv"
+    header = "task_id\thash\tnative_id\tprocess\tname\tstatus\texit\n"
+    rows = [
+        (
+            "1",
+            "aa/111111",
+            "701",
+            "SSQTL_NORMALIZE:RESOLVE_EXECUTION_POLICY",
+            "SSQTL_NORMALIZE:RESOLVE_EXECUTION_POLICY (execution-policy:standalone)",
+            "COMPLETED",
+            "0",
+        ),
+        (
+            "2",
+            "bb/222222",
+            "702",
+            "SSQTL_NORMALIZE:VALIDATE_RUNTIME_IDENTITY",
+            "SSQTL_NORMALIZE:VALIDATE_RUNTIME_IDENTITY (standalone)",
+            "COMPLETED",
+            "0",
+        ),
+        (
+            "3",
+            "cc/333333",
+            "703",
+            "SSQTL_NORMALIZE:NORMALIZE_SSQTL_V3",
+            "SSQTL_NORMALIZE:NORMALIZE_SSQTL_V3 (run_001:generation_001)",
+            "COMPLETED",
+            "0",
+        ),
+    ]
+    trace.write_text(
+        header + "".join("\t".join(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    selected = _validate_ssqtl_normalization_trace(
+        trace,
+        profile="scc",
+        run_id="run_001",
+        generation_id="generation_001",
+    )
+
+    assert (
+        selected["ssqtl_normalization"]["process"]
+        == "SSQTL_NORMALIZE:NORMALIZE_SSQTL_V3"
+    )
+    assert selected["ssqtl_normalization"]["name"].endswith(
+        " (run_001:generation_001)"
+    )
+
+    rows[-1] = (
+        *rows[-1][:4],
+        "SSQTL_NORMALIZE:NORMALIZE_SSQTL_V3 (other:run)",
+        *rows[-1][5:],
+    )
+    trace.write_text(
+        header + "".join("\t".join(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="trace tag differs"):
+        _validate_ssqtl_normalization_trace(
+            trace,
+            profile="scc",
+            run_id="run_001",
+            generation_id="generation_001",
+        )
+
+
 def test_local_accounting_treats_execution_policy_as_non_case_role(
     tmp_path: Path,
 ) -> None:
