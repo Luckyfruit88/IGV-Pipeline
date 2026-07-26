@@ -584,7 +584,8 @@ def _validate_ssqtl_normalization_trace(
             role = "runtime_manifest_validation"
         elif "NORMALIZE_SSQTL_V3" in process:
             role = "ssqtl_normalization"
-            if f"({run_id}:{generation_id})" not in process:
+            task_name = row.get("name", "") or process
+            if not task_name.endswith(f" ({run_id}:{generation_id})"):
                 raise ValueError("ssQTL normalization trace tag differs from run identity")
         else:
             raise ValueError(f"ssQTL normalization trace has an unexpected process: {process}")
