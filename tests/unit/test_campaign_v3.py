@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -241,6 +242,10 @@ def test_prepare_freezes_atomic_contract_request_and_exact_subset(
 ) -> None:
     campaign, result = _prepared_campaign(tmp_path, monkeypatch, master_tasks)
     assert result["status"] == "PREPARED"
+    assert result["commit_modes"] == {
+        "contract": "RENAME_NOREPLACE",
+        "pilot_batch": "RENAME_NOREPLACE",
+    }
     assert (campaign / "contract" / "campaign.json").is_file()
     assert not (campaign / ".contract.prepare").exists()
     assert not (campaign / "batches" / ".pilot-001.prepare").exists()
@@ -274,6 +279,123 @@ def test_prepare_freezes_atomic_contract_request_and_exact_subset(
             campaign_id="fhs-igv-v3",
             actor="operator",
         )
+
+
+def test_campaign_commit_uses_locked_nfs_compatible_rename_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    staging = campaign / ".contract.prepare"
+    staging.mkdir()
+    (staging / "campaign.json").write_text("{}\n", encoding="utf-8")
+
+    def unsupported_noreplace(_source: Path, _destination: Path) -> None:
+        raise OSError(errno.EINVAL, "renameat2 flags unsupported")
+
+    monkeypatch.setattr(
+        campaign_v3,
+        "atomic_rename_noreplace",
+        unsupported_noreplace,
+    )
+    with campaign_v3._campaign_commit_lock(campaign) as commit_guard:
+        mode = campaign_v3._publish_staged_directory(
+            staging,
+            campaign / "contract",
+            commit_guard=commit_guard,
+        )
+
+    assert mode == "LOCKED_POSIX_RENAME_NFS_COMPAT"
+    assert not staging.exists()
+    assert (
+        campaign / "contract" / "campaign.json"
+    ).read_text(encoding="utf-8") == "{}\n"
+
+
+def test_prepare_campaign_commits_contract_and_batch_with_nfs_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    master_tasks: list[dict],
+) -> None:
+    monkeypatch.setattr(
+        campaign_v3,
+        "atomic_rename_noreplace",
+        lambda _source, _destination: (_ for _ in ()).throw(
+            OSError(errno.EINVAL, "renameat2 flags unsupported")
+        ),
+    )
+
+    campaign, result = _prepared_campaign(tmp_path, monkeypatch, master_tasks)
+
+    assert result["status"] == "PREPARED"
+    assert result["commit_modes"] == {
+        "contract": "LOCKED_POSIX_RENAME_NFS_COMPAT",
+        "pilot_batch": "LOCKED_POSIX_RENAME_NFS_COMPAT",
+    }
+    assert (campaign / "contract" / "campaign.json").is_file()
+    assert (
+        campaign / "batches" / "pilot-001" / "batch-request.json"
+    ).is_file()
+    assert [row["event_type"] for row in verify_campaign_ledger(campaign)] == [
+        "SELECTION_FROZEN"
+    ]
+
+
+def test_campaign_commit_fallback_requires_an_active_campaign_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    staging = campaign / ".contract.prepare"
+    staging.mkdir()
+
+    monkeypatch.setattr(
+        campaign_v3,
+        "atomic_rename_noreplace",
+        lambda _source, _destination: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "unsupported")
+        ),
+    )
+    with campaign_v3._campaign_commit_lock(campaign) as commit_guard:
+        pass
+    with pytest.raises(RuntimeError, match="no longer active"):
+        campaign_v3._publish_staged_directory(
+            staging,
+            campaign / "contract",
+            commit_guard=commit_guard,
+        )
+    assert staging.is_dir()
+    assert not (campaign / "contract").exists()
+
+
+def test_campaign_commit_does_not_fallback_for_unrelated_rename_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    staging = campaign / ".contract.prepare"
+    staging.mkdir()
+
+    monkeypatch.setattr(
+        campaign_v3,
+        "atomic_rename_noreplace",
+        lambda _source, _destination: (_ for _ in ()).throw(
+            OSError(errno.EIO, "storage failure")
+        ),
+    )
+    with campaign_v3._campaign_commit_lock(campaign) as commit_guard:
+        with pytest.raises(OSError) as failure:
+            campaign_v3._publish_staged_directory(
+                staging,
+                campaign / "contract",
+                commit_guard=commit_guard,
+            )
+    assert failure.value.errno == errno.EIO
+    assert staging.is_dir()
+    assert not (campaign / "contract").exists()
 
 
 def test_ledger_is_single_scientific_chain_and_rejects_execution_truth(

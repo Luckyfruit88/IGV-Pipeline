@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import fcntl
 import hashlib
 import json
@@ -87,6 +88,14 @@ class CampaignLedgerContext:
     campaign_contract_sha256: str
     ledger_path: Path
     lock_path: Path
+
+
+@dataclass
+class _CampaignCommitGuard:
+    campaign_root: Path
+    lock_path: Path
+    descriptor: int
+    active: bool = True
 
 
 def _safe_id(value: object, *, label: str) -> str:
@@ -209,24 +218,100 @@ def _create_exclusive_staging_directory(path: Path) -> Path:
     return path
 
 
-def _publish_staged_directory(staging: Path, destination: Path) -> None:
+def _validate_campaign_commit_guard(
+    guard: _CampaignCommitGuard,
+    destination: Path,
+) -> None:
+    if not guard.active:
+        raise RuntimeError("campaign commit guard is no longer active")
+    try:
+        metadata = os.fstat(guard.descriptor)
+    except OSError as exc:
+        raise RuntimeError("campaign commit guard descriptor is closed") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(
+            "campaign commit guard does not reference a regular lock file"
+        )
+    parent = destination.parent.resolve(strict=True)
+    root = guard.campaign_root.resolve(strict=True)
+    if parent != root and root not in parent.parents:
+        raise ValueError(
+            f"campaign commit destination is outside the locked campaign: {destination}"
+        )
+
+
+def _rename_staged_directory(
+    staging: Path,
+    destination: Path,
+    *,
+    commit_guard: _CampaignCommitGuard,
+) -> str:
+    """Commit one immutable directory, with a lock-scoped NFS fallback.
+
+    Some NFS servers reject ``renameat2(RENAME_NOREPLACE)`` with ``EINVAL``.
+    POSIX rename remains atomic there, while the active campaign flock supplies
+    the no-replace serialization for cooperating controllers.
+    """
+
+    try:
+        atomic_rename_noreplace(staging, destination)
+        return "RENAME_NOREPLACE"
+    except OSError as exc:
+        unsupported = {
+            errno.EINVAL,
+            errno.ENOSYS,
+            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+            errno.EOPNOTSUPP,
+        }
+        if exc.errno not in unsupported:
+            raise
+
+    _validate_campaign_commit_guard(commit_guard, destination)
+    staging_parent = staging.parent.resolve(strict=True)
+    destination_parent = destination.parent.resolve(strict=True)
+    if staging_parent != destination_parent:
+        raise RuntimeError(
+            "locked POSIX rename fallback requires staging and destination "
+            "to share one parent directory"
+        )
+    try:
+        os.lstat(destination)
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(
+            errno.EEXIST,
+            "immutable campaign destination already exists",
+            str(destination),
+        )
+    os.rename(staging, destination)
+    return "LOCKED_POSIX_RENAME_NFS_COMPAT"
+
+
+def _publish_staged_directory(
+    staging: Path,
+    destination: Path,
+    *,
+    commit_guard: _CampaignCommitGuard,
+) -> str:
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"immutable campaign destination already exists: {destination}")
     if staging.is_symlink() or not staging.is_dir():
         raise ValueError(f"campaign staging path is not a regular directory: {staging}")
     _fsync_directory(staging)
-    atomic_rename_noreplace(staging, destination)
+    commit_mode = _rename_staged_directory(
+        staging,
+        destination,
+        commit_guard=commit_guard,
+    )
     _fsync_directory(destination.parent)
+    return commit_mode
 
 
 @contextmanager
-def campaign_lock(campaign_dir: str | Path) -> Iterator[Path]:
-    """Own the sole short, non-blocking control lock for one campaign.
-
-    The caller must never hold this context while running Nextflow, qsub,
-    interactive review, or file transfer.
-    """
-
+def _campaign_commit_lock(
+    campaign_dir: str | Path,
+) -> Iterator[_CampaignCommitGuard]:
     root = _regular_directory(campaign_dir, label="campaign directory", create=True)
     control = root / "control"
     if control.is_symlink():
@@ -248,12 +333,32 @@ def campaign_lock(campaign_dir: str | Path) -> Iterator[Path]:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise CampaignLockError(f"campaign control transaction is already active: {root}") from exc
-        yield lock_path
+        guard = _CampaignCommitGuard(
+            campaign_root=root,
+            lock_path=lock_path,
+            descriptor=descriptor,
+        )
+        try:
+            yield guard
+        finally:
+            guard.active = False
     finally:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
+
+
+@contextmanager
+def campaign_lock(campaign_dir: str | Path) -> Iterator[Path]:
+    """Own the sole short, non-blocking control lock for one campaign.
+
+    The caller must never hold this context while running Nextflow, qsub,
+    interactive review, or file transfer.
+    """
+
+    with _campaign_commit_lock(campaign_dir) as guard:
+        yield guard.lock_path
 
 
 def _contract_path(root: Path) -> Path:
@@ -1074,7 +1179,7 @@ def prepare_campaign(
         selection_sha256=selection_file_sha256,
     )
     request_path, task_path = _batch_paths(root, "pilot-001")
-    with campaign_lock(root):
+    with _campaign_commit_lock(root) as commit_guard:
         visible_entries = {path.name for path in root.iterdir()} - {"control"}
         if visible_entries:
             raise FileExistsError(f"campaign is already prepared: {root}")
@@ -1090,8 +1195,16 @@ def prepare_campaign(
         _write_exclusive_json(contract_stage / "pilot_selection.json", selection)
         _write_exclusive_bytes(batch_stage / "tasks.jsonl", task_bytes)
         _write_exclusive_json(batch_stage / "batch-request.json", request)
-        _publish_staged_directory(contract_stage, root / "contract")
-        _publish_staged_directory(batch_stage, request_path.parent)
+        contract_commit_mode = _publish_staged_directory(
+            contract_stage,
+            root / "contract",
+            commit_guard=commit_guard,
+        )
+        batch_commit_mode = _publish_staged_directory(
+            batch_stage,
+            request_path.parent,
+            commit_guard=commit_guard,
+        )
         context = campaign_ledger_context(root)
         selection_event = _append_event_locked(
             context,
@@ -1120,6 +1233,10 @@ def prepare_campaign(
         "batch_request": str(request_path),
         "batch_request_sha256": sha256_file(request_path),
         "ledger_head_sha256": selection_event["event_sha256"],
+        "commit_modes": {
+            "contract": contract_commit_mode,
+            "pilot_batch": batch_commit_mode,
+        },
     }
 
 
@@ -1390,7 +1507,7 @@ def create_next_batch(
     )
     request_path, _task_path = _batch_paths(root, batch_id)
 
-    with campaign_lock(root):
+    with _campaign_commit_lock(root) as commit_guard:
         if sha256_file(contract_path) != contract_file_sha:
             raise ValueError("campaign contract changed before next-batch commit")
         current_inventory = tuple(
@@ -1410,6 +1527,7 @@ def create_next_batch(
         ):
             raise ValueError("next-batch source binding changed before commit")
         if recovering_orphan:
+            batch_commit_mode = "RECOVERED_EXISTING_IMMUTABLE_BATCH"
             if (
                 orphan_path != request_path
                 or orphan_request != request
@@ -1430,7 +1548,11 @@ def create_next_batch(
             )
             _write_exclusive_bytes(batch_stage / "tasks.jsonl", task_bytes)
             _write_exclusive_json(batch_stage / "batch-request.json", request)
-            _publish_staged_directory(batch_stage, request_path.parent)
+            batch_commit_mode = _publish_staged_directory(
+                batch_stage,
+                request_path.parent,
+                commit_guard=commit_guard,
+            )
         event = _append_event_locked(
             context,
             event_type="NEXT_BATCH_AUTHORIZED",
@@ -1459,6 +1581,7 @@ def create_next_batch(
         "runtime_fingerprint_sha256": runtime_fingerprint,
         "ledger_head_sha256": event["event_sha256"],
         "recovered_after_object_publish": recovering_orphan,
+        "commit_mode": batch_commit_mode,
     }
 
 
