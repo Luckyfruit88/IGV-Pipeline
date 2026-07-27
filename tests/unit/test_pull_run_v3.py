@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from ssqtl_igv import orchestrator_v3, v3_cli
+from ssqtl_igv.project_admission_v3 import merge_snapshot_outputs
+from ssqtl_igv.utils import sha256_file
 
 
 def _project(tmp_path: Path) -> Path:
@@ -184,7 +186,9 @@ def test_auto_parallelism_uses_cpu_and_eight_gib_memory_slots(
     assert orchestrator_v3.resolve_max_parallel("auto") == 1
 
 
-def _case_result(task_id: str, order: int, *, eligible: bool) -> dict:
+def _case_result(
+    task_id: str, order: int, *, eligible: bool, review_sha256: str = ""
+) -> dict:
     root = f"results/cases/{task_id}"
     return {
         "task_id": task_id,
@@ -197,7 +201,7 @@ def _case_result(task_id: str, order: int, *, eligible: bool) -> dict:
             {
                 "review_image": {
                     "relative_path": f"{root}/review.png",
-                    "sha256": "c" * 64,
+                    "sha256": review_sha256,
                     "size": 10,
                 },
                 "raw_igv": {
@@ -218,9 +222,19 @@ def _case_result(task_id: str, order: int, *, eligible: bool) -> dict:
 
 
 def test_direct_output_tables_cover_ready_and_failed_cases(tmp_path: Path) -> None:
-    tasks = [{"task_id": "ready"}, {"task_id": "failed"}]
+    tasks = [
+        {
+            "task_id": task_id,
+            "adapter_id": "generic",
+            "core": {"locus": {"contig": "chr11"}},
+        }
+        for task_id in ("ready", "failed")
+    ]
+    review = tmp_path / "results/cases/ready/review.png"
+    review.parent.mkdir(parents=True)
+    review.write_bytes(b"0123456789")
     results = [
-        _case_result("ready", 1, eligible=True),
+        _case_result("ready", 1, eligible=True, review_sha256=sha256_file(review)),
         _case_result("failed", 2, eligible=False),
     ]
 
@@ -232,20 +246,151 @@ def test_direct_output_tables_cover_ready_and_failed_cases(tmp_path: Path) -> No
         failures = list(csv.DictReader(handle, delimiter="\t"))
     assert [row["task_id"] for row in snapshots] == ["ready", "failed"]
     assert snapshots[0]["status"] == "SNAPSHOT_READY"
-    assert snapshots[0]["review_png"] == "results/cases/ready/review.png"
+    assert snapshots[0]["chromosome"] == "chr11"
+    assert snapshots[0]["relative_path"] == "snapshots/chr11/ready.png"
+    assert snapshots[0]["sha256"] == sha256_file(review)
+    assert (tmp_path / snapshots[0]["relative_path"]).read_bytes() == review.read_bytes()
     assert snapshots[1]["status"] == "CASE_FAILED"
     assert failures == [
         {
             "manifest_order": "2",
             "task_id": "failed",
+            "chromosome": "chr11",
             "failure_code": "CASE_RENDER_FAILED",
             "message": "fixture failure",
-            "case_result_json": "results/cases/failed/case_result.json",
             "input_fingerprint": "b" * 64,
         }
     ]
     assert projection["snapshot_count"] == 1
     assert projection["failed_case_count"] == 1
+
+
+def test_all_failed_batch_still_publishes_an_empty_snapshot_directory(
+    tmp_path: Path,
+) -> None:
+    tasks = [
+        {
+            "task_id": "failed",
+            "adapter_id": "generic",
+            "core": {"locus": {"contig": "chr11"}},
+        }
+    ]
+    projection = orchestrator_v3._write_direct_output_tables(
+        tmp_path, tasks, [_case_result("failed", 1, eligible=False)]
+    )
+
+    assert (tmp_path / "snapshots").is_dir()
+    assert list((tmp_path / "snapshots").iterdir()) == []
+    assert projection["snapshot_count"] == 0
+    assert projection["failed_case_count"] == 1
+
+
+def _ssqtl_snapshot_task(
+    task_id: str = "AG_chr13_79342833_79342832__SNP_chr13_79342859_T_C",
+) -> dict:
+    return {
+        "task_id": task_id,
+        "adapter_id": "ssqtl",
+        "core": {"locus": {"contig": "chr13"}},
+        "adapter_data": {
+            "ag": {
+                "chrom": "chr13",
+                "source_start": 79342833,
+                "source_end": 79342832,
+            },
+            "snp": {
+                "chrom": "chr13",
+                "position": 79342859,
+                "ref": "T",
+                "alt": "C",
+            },
+        },
+    }
+
+
+def test_ssqtl_snapshot_path_preserves_reverse_strand_source_coordinates() -> None:
+    chromosome, relative = orchestrator_v3._snapshot_target(_ssqtl_snapshot_task())
+    assert chromosome == "chr13"
+    assert relative == (
+        "snapshots/chr13/"
+        "AG_chr13_79342833_79342832__SNP_chr13_79342859_T_C.png"
+    )
+
+
+def test_ssqtl_snapshot_publication_rejects_cross_chromosome_pair() -> None:
+    task = _ssqtl_snapshot_task()
+    task["adapter_data"]["snp"]["chrom"] = "chr14"
+    with pytest.raises(ValueError, match="AG and SNP chromosomes differ"):
+        orchestrator_v3._snapshot_target(task)
+
+
+def test_ssqtl_snapshot_publication_rejects_task_id_identity_drift() -> None:
+    task = _ssqtl_snapshot_task(
+        "AG_chr13_79342832_79342833__SNP_chr13_79342859_T_C"
+    )
+    with pytest.raises(ValueError, match="task_id differs"):
+        orchestrator_v3._snapshot_target(task)
+
+
+def _snapshot_product(root: Path, rows: list[tuple[int, str, str, bytes]]) -> None:
+    (root / ".igv-pipeline").mkdir(parents=True)
+    snapshot_lines = [
+        "manifest_order\ttask_id\tchromosome\trelative_path\tsha256\tstatus"
+    ]
+    for order, task_id, chromosome, payload in rows:
+        image = root / f"snapshots/{chromosome}/{task_id}.png"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(payload)
+        snapshot_lines.append(
+            f"{order}\t{task_id}\t{chromosome}\t"
+            f"snapshots/{chromosome}/{task_id}.png\t{sha256_file(image)}\tSNAPSHOT_READY"
+        )
+    (root / "snapshots.tsv").write_text(
+        "\n".join(snapshot_lines) + "\n", encoding="utf-8"
+    )
+    (root / "failed_cases.tsv").write_text(
+        "manifest_order\ttask_id\tchromosome\tfailure_code\tmessage\tinput_fingerprint\n",
+        encoding="utf-8",
+    )
+    (root / "run_summary.json").write_text(
+        '{"authoritative":false,"status":"SNAPSHOTS_READY","exit_code":0}\n',
+        encoding="utf-8",
+    )
+
+
+def test_snapshot_batches_append_and_replay_idempotently(tmp_path: Path) -> None:
+    destination = tmp_path / "production"
+    incoming = tmp_path / "batch-002"
+    _snapshot_product(destination, [(1, "case_1", "chr11", b"one")])
+    _snapshot_product(incoming, [(2, "case_2", "chr13", b"two")])
+
+    merged = merge_snapshot_outputs(destination, incoming)
+    replayed = merge_snapshot_outputs(destination, incoming)
+
+    assert merged["status"] == "PUBLISHED"
+    assert merged["commit_mode"] == "LOCKED_POSIX_RENAME_NFS_COMPAT"
+    assert merged["added_case_count"] == 1
+    assert replayed["status"] == "IDEMPOTENT"
+    with (destination / "snapshots.tsv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["task_id"] for row in rows] == ["case_1", "case_2"]
+    assert (destination / rows[1]["relative_path"]).read_bytes() == b"two"
+
+
+def test_snapshot_batch_rejects_same_task_with_different_checksum(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "production"
+    incoming = tmp_path / "batch-002"
+    _snapshot_product(destination, [(1, "case_1", "chr11", b"one")])
+    _snapshot_product(incoming, [(1, "case_1", "chr11", b"different")])
+    original_index = (destination / "snapshots.tsv").read_bytes()
+
+    with pytest.raises(ValueError, match="different metadata/checksum"):
+        merge_snapshot_outputs(destination, incoming)
+
+    assert (destination / "snapshots.tsv").read_bytes() == original_index
+    assert (destination / "snapshots/chr11/case_1.png").read_bytes() == b"one"
 
 
 def test_trace_report_combines_nextflow_sources_and_freezes_digests(tmp_path: Path) -> None:

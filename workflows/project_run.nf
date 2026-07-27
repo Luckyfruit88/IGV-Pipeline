@@ -275,9 +275,8 @@ workflow PROJECT_RUN {
     )
 
     emit:
-    results = FINALIZE_CASES.out.results
-    contract = FINALIZE_CASES.out.contract
-    shards = FINALIZE_CASES.out.shards
+    snapshot_files = FINALIZE_CASES.out.snapshot_files
+    provenance = FINALIZE_CASES.out.provenance
     snapshots = FINALIZE_CASES.out.snapshots
     failures = FINALIZE_CASES.out.failures
     summary = FINALIZE_CASES.out.summary

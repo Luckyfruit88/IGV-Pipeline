@@ -16,6 +16,7 @@ from .artifact_admission_v3 import (
 from .contracts import validate_v3_case_result_document
 from .evidence_v3 import locate_verified_accounting
 from .publication import verify_checksum_tree
+from .product_paths_v3 import cases_root, contract_root, resolve_case_artifact
 from .review_server import (
     GENERIC_ASSERTIONS,
     SSQTL_ASSERTIONS,
@@ -65,21 +66,14 @@ def _artifact(
     relative = Path(str(record.get("relative_path", "")))
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise ValueError(f"unsafe case artifact path: {relative}")
-    candidate = run_root / relative
-    if candidate.is_symlink() or not candidate.is_file():
-        raise ValueError(f"case artifact is unavailable or symlinked: {candidate}")
-    resolved = candidate.resolve(strict=True)
-    try:
-        resolved.relative_to(run_root)
-    except ValueError as exc:
-        raise ValueError(f"case artifact escapes the run root: {candidate}") from exc
+    resolved = resolve_case_artifact(run_root, case_result, role, record)
     digest = str(record.get("sha256", "")).strip().lower()
     if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise ValueError(f"case artifact SHA-256 is malformed: {candidate}")
+        raise ValueError(f"case artifact SHA-256 is malformed: {resolved}")
     if sha256_file(resolved) != digest:
-        raise ValueError(f"case artifact checksum drift: {candidate}")
+        raise ValueError(f"case artifact checksum drift: {resolved}")
     if int(record.get("size", -1)) != resolved.stat().st_size:
-        raise ValueError(f"case artifact size drift: {candidate}")
+        raise ValueError(f"case artifact size drift: {resolved}")
     assert_production_artifact(resolved, label=f"review package {role}")
     return resolved, digest
 
@@ -88,13 +82,15 @@ def _case_contracts(
     run_root: Path,
     tasks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    cases_root = run_root / "results" / "cases"
-    assert_production_artifact_tree(cases_root, label="review package case-result tree")
+    case_results_root = cases_root(run_root)
+    assert_production_artifact_tree(
+        case_results_root, label="review package case-result tree"
+    )
     contracts: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     for task in tasks:
         task_id = str(task["task_id"])
-        result_path = cases_root / task_id / "case_result.json"
+        result_path = case_results_root / task_id / "case_result.json"
         result = _object(result_path, label=f"case result {task_id}")
         validate_v3_case_result_document(result)
         for field in (
@@ -234,8 +230,9 @@ def build_review_package_v3(run_dir: str | Path) -> dict[str, Any]:
     runtime_binding = _runtime_binding(run_root)
     contracts, sources = _case_contracts(run_root, tasks)
     contract_set_sha256 = sha256_json(contracts)
-    run_identity = _object(run_root / "contract" / "run_identity.json", label="run identity")
-    controller_path = run_root / "contract" / "controller_runtime.json"
+    immutable_contract = contract_root(run_root)
+    run_identity = _object(immutable_contract / "run_identity.json", label="run identity")
+    controller_path = immutable_contract / "controller_runtime.json"
     controller_runtime = _object(controller_path, label="controller runtime identity")
     package_identity = {
         "run_id": run_identity["run_id"],

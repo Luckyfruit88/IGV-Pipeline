@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from ssqtl_igv import project_launcher
+from ssqtl_igv.utils import sha256_file
 
 
 def _inputs(tmp_path: Path) -> tuple[Path, Path]:
@@ -159,6 +160,71 @@ def test_postflight_rejects_duplicate_terminal_trace_rows(
 
     with pytest.raises(ValueError, match="exactly one"):
         project_launcher.validate_project_postflight(output)
+
+
+def test_postflight_validates_direct_snapshot_product(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output"
+    provenance = output / ".igv-pipeline"
+    case_root = provenance / "cases/case_1"
+    (provenance / "contract").mkdir(parents=True)
+    case_root.mkdir(parents=True)
+    (output / "reports").mkdir(parents=True)
+    snapshot = output / "snapshots/chr11/case_1.png"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_bytes(b"fixture-snapshot")
+    snapshot_sha = sha256_file(snapshot)
+    (provenance / "contract/tasks.jsonl").write_text(
+        '{"task_id":"case_1"}\n', encoding="utf-8"
+    )
+    (case_root / "case_result.json").write_text(
+        json.dumps(
+            {
+                "task_id": "case_1",
+                "eligible": True,
+                "artifacts": {"review_image": {"sha256": snapshot_sha}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (case_root / "terminal_bundle.json").write_text(
+        '{"task_id":"case_1","status":"SUCCEEDED"}\n', encoding="utf-8"
+    )
+    (output / "snapshots.tsv").write_text(
+        "manifest_order\ttask_id\tchromosome\trelative_path\tsha256\tstatus\n"
+        f"1\tcase_1\tchr11\tsnapshots/chr11/case_1.png\t{snapshot_sha}\tSNAPSHOT_READY\n",
+        encoding="utf-8",
+    )
+    (output / "reports/trace.txt").write_text(
+        "task_id\thash\tnative_id\tname\tstatus\texit\n"
+        "1\taa\t-\tPROJECT_RUN:RUN_PORTABLE_CASE (case_1)\tCOMPLETED\t0\n",
+        encoding="utf-8",
+    )
+    (output / "run_summary.json").write_text(
+        json.dumps(
+            {
+                "authoritative": False,
+                "status": "SNAPSHOTS_READY",
+                "exit_code": 0,
+                "expected_case_count": 1,
+                "observed_case_count": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        project_launcher,
+        "validate_v3_terminal_bundle_document",
+        lambda _bundle, _case: None,
+    )
+
+    result = project_launcher.validate_project_postflight(output)
+
+    assert result["status"] == "SNAPSHOTS_READY"
+    assert result["postflight"]["task_count"] == 1
 
 
 def test_postflight_accepts_failed_retry_before_one_final_attempt(
