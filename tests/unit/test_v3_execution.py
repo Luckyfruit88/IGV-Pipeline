@@ -305,11 +305,9 @@ def test_samtools_validation_uses_the_explicit_nondefault_bai(
     assert calls[1][0] == [
         "samtools",
         "idxstats",
-        "-X",
-        str(bam),
-        str(explicit_bai),
+        f"{bam}##idx##{explicit_bai}",
     ]
-    assert calls[1][0][-1] != str(default_bai)
+    assert str(default_bai) not in calls[1][0][-1]
     assert "env" not in calls[1][1]
 
 

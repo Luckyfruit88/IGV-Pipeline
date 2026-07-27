@@ -668,8 +668,14 @@ def test_ssqtl_worker_uses_explicit_bai_for_idxstats(monkeypatch: pytest.MonkeyP
         return subprocess.CompletedProcess(command, 0, stdout="chr1\t300\t0\t0\n", stderr="")
 
     monkeypatch.setattr("ssqtl_igv.v3_worker.subprocess.run", fake_run)
-    assert _samtools_check_explicit_index("samtools", Path("case.bam"), Path("chosen.bai")) == (True, "")
-    assert calls[1] == ["samtools", "idxstats", "-X", "case.bam", "chosen.bai"]
+    assert _samtools_check_explicit_index(
+        "samtools", Path("case.bam"), Path("chosen.bai")
+    ) == (True, "")
+    assert calls[1] == [
+        "samtools",
+        "idxstats",
+        "case.bam##idx##chosen.bai",
+    ]
 
 
 def test_public_cli_uses_project_yaml_not_raw_ssqtl_flags() -> None:
