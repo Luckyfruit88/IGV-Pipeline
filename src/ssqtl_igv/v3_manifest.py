@@ -165,14 +165,33 @@ def _resolve_relative_file(root: Path, value: str, *, label: str) -> tuple[str, 
 
 def _portable_stage_name(relative_path: str, *, role: str, discriminator: str) -> str:
     name = PurePosixPath(relative_path).name
-    suffix = "".join(PurePosixPath(name).suffixes)
+    suffix_parts = list(PurePosixPath(name).suffixes)
+    suffix = "".join(suffix_parts)
     stem = name[: -len(suffix)] if suffix else name
     digest = sha256_json(
         {"declared_path": relative_path, "role": role, "discriminator": discriminator}
     )[:12]
-    safe_suffix = "".join(
-        character for character in suffix if character.isalnum() or character in "._-"
-    )[:40]
+    safe_suffix_parts = [
+        "".join(
+            character
+            for character in part
+            if character.isalnum() or character in "._-"
+        )
+        for part in suffix_parts
+    ]
+    if safe_suffix_parts and len(safe_suffix_parts[-1]) > 40:
+        raise ValueError(f"terminal file extension exceeds 40 characters: {name!r}")
+    retained_suffix_parts: list[str] = []
+    remaining_suffix_budget = 40
+    for part in reversed(safe_suffix_parts):
+        if len(part) > remaining_suffix_budget:
+            break
+        retained_suffix_parts.append(part)
+        remaining_suffix_budget -= len(part)
+    # IGV dispatches by the terminal extension. Retain complete suffix
+    # components from the right so long dotted BAM names can never become
+    # extensionless binary inputs such as ``*.b``.
+    safe_suffix = "".join(reversed(retained_suffix_parts))
     return f"{safe_name(role)[:24]}_{safe_name(stem)[:110]}_{digest}{safe_suffix}"
 
 
