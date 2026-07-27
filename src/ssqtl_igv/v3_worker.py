@@ -185,6 +185,17 @@ def _sequence_lengths(text: str, *, label: str) -> dict[str, int]:
     return lengths
 
 
+def _samtools_explicit_index_input(bam: Path, bai: Path) -> str:
+    """Bind one alignment to its canonical index using HTSlib's path syntax."""
+
+    separator = "##idx##"
+    bam_path = str(bam)
+    bai_path = str(bai)
+    if separator in bam_path or separator in bai_path:
+        raise ValueError("staged BAM/BAI path contains the reserved ##idx## delimiter")
+    return f"{bam_path}{separator}{bai_path}"
+
+
 def _samtools_validate(
     tracks: Iterable[dict[str, Any]],
     staged: dict[str, Path],
@@ -229,7 +240,7 @@ def _samtools_validate(
                 + (quick.stderr.strip() or quick.stdout.strip())
             )
         index = subprocess.run(
-            [command, "idxstats", "-X", str(bam), str(bai)],
+            [command, "idxstats", _samtools_explicit_index_input(bam, bai)],
             check=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -276,7 +287,7 @@ def _samtools_check_explicit_index(
             timeout=120,
         )
         index = subprocess.run(
-            [command, "idxstats", "-X", str(bam), str(bai)],
+            [command, "idxstats", _samtools_explicit_index_input(bam, bai)],
             check=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -288,7 +299,11 @@ def _samtools_check_explicit_index(
     if quick.returncode:
         return False, (quick.stdout + quick.stderr).strip() or "samtools quickcheck failed"
     if index.returncode or not index.stdout.strip():
-        return False, (index.stdout + index.stderr).strip() or "samtools idxstats -X failed"
+        return (
+            False,
+            (index.stdout + index.stderr).strip()
+            or "samtools idxstats with explicit index failed",
+        )
     return True, ""
 
 
@@ -730,7 +745,7 @@ def _write_native_ssqtl_evidence(
             "status": "PASS",
             "evidence": {
                 "track_count": len(task["core"]["tracks"]),
-                "command_contract": "samtools idxstats -X BAM BAI",
+                "command_contract": "samtools idxstats BAM##idx##BAI",
                 "not_applicable_reason": (
                     "no eligible BAM tracks; annotation-only evidence was rendered"
                     if not task["core"]["tracks"]

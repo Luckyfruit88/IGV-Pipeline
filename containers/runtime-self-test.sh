@@ -47,6 +47,21 @@ grep -F '"status": "PASS"' "${self_test_root}/manifest-validation/validation.jso
 Rscript -e 'stopifnot(as.character(getRversion()) == "4.5.2")'
 samtools --version | grep -F 'samtools 1.18'
 htsfile --version | grep -F 'htsfile (htslib) 1.18'
+printf '%s\n' \
+    '@HD	VN:1.6	SO:coordinate' \
+    '@SQ	SN:chr1	LN:100' \
+    'read1	0	chr1	1	60	1M	*	0	0	A	I' \
+    > "${self_test_root}/explicit-index.sam"
+samtools view -b \
+    -o "${self_test_root}/explicit-index.bam" \
+    "${self_test_root}/explicit-index.sam"
+samtools index \
+    -o "${self_test_root}/custom-index.bai" \
+    "${self_test_root}/explicit-index.bam"
+samtools idxstats \
+    "${self_test_root}/explicit-index.bam##idx##${self_test_root}/custom-index.bai" \
+    > "${self_test_root}/explicit-index.idxstats"
+grep -Fx $'chr1\t100\t1\t0' "${self_test_root}/explicit-index.idxstats"
 pdftotext -v 2>&1 | grep -F '26.07.0'
 magick -version | grep -F 'ImageMagick 7.1.2-27'
 tesseract --version | grep -F 'tesseract 5.5.2'
