@@ -272,6 +272,111 @@ def _validated_terminal_case_results(
     return case_results, failures
 
 
+_SSQTL_SNAPSHOT_TASK_ID = re.compile(
+    r"^AG_(?P<ag_chrom>chr[A-Za-z0-9_.-]+)_"
+    r"(?P<ag_start>[1-9][0-9]*)_(?P<ag_end>[1-9][0-9]*)"
+    r"__SNP_(?P<snp_chrom>chr[A-Za-z0-9_.-]+)_"
+    r"(?P<snp_position>[1-9][0-9]*)_"
+    r"(?P<ref>[ACGTN]+)_(?P<alt>[ACGTN]+)$"
+)
+_SNAPSHOT_CHROMOSOME = re.compile(r"^chr[A-Za-z0-9_.-]+$")
+
+
+def _snapshot_target(task: Mapping[str, Any]) -> tuple[str, str]:
+    """Return the canonical public chromosome and relative PNG path.
+
+    ssQTL names are intentionally redundant with the canonical task payload.
+    Validate every redundant field so an AG/SNP chromosome mismatch, coordinate
+    rewrite, or allele drift cannot silently choose a publication directory.
+    Generic tasks have no SNP axis and therefore use the canonical locus contig.
+    """
+
+    task_id = str(task.get("task_id", ""))
+    if not task_id or "/" in task_id or "\\" in task_id:
+        raise ValueError("snapshot task_id is empty or path-like")
+    if len(f"{task_id}.png".encode("utf-8")) > 255:
+        raise ValueError(f"snapshot filename exceeds filesystem limits: {task_id}")
+    adapter = str(task.get("adapter_id", ""))
+    if adapter == "ssqtl":
+        match = _SSQTL_SNAPSHOT_TASK_ID.fullmatch(task_id)
+        if match is None:
+            raise ValueError(f"ssQTL task_id does not match the snapshot contract: {task_id}")
+        adapter_data = task.get("adapter_data")
+        if not isinstance(adapter_data, Mapping):
+            raise ValueError(f"ssQTL task lacks adapter_data: {task_id}")
+        ag = adapter_data.get("ag")
+        snp = adapter_data.get("snp")
+        if not isinstance(ag, Mapping) or not isinstance(snp, Mapping):
+            raise ValueError(f"ssQTL task lacks AG/SNP publication identity: {task_id}")
+        ag_chrom = str(ag.get("chrom", ""))
+        snp_chrom = str(snp.get("chrom", ""))
+        if ag_chrom != snp_chrom:
+            raise ValueError(
+                f"AG and SNP chromosomes differ; refusing snapshot publication: {task_id}"
+            )
+        observed = (
+            match.group("ag_chrom"),
+            int(match.group("ag_start")),
+            int(match.group("ag_end")),
+            match.group("snp_chrom"),
+            int(match.group("snp_position")),
+            match.group("ref"),
+            match.group("alt"),
+        )
+        expected = (
+            ag_chrom,
+            int(ag.get("source_start", -1)),
+            int(ag.get("source_end", -1)),
+            snp_chrom,
+            int(snp.get("position", -1)),
+            str(snp.get("ref", "")),
+            str(snp.get("alt", "")),
+        )
+        if observed != expected:
+            raise ValueError(
+                f"task_id differs from canonical AG/SNP identity: {task_id}"
+            )
+        locus = task.get("core", {}).get("locus", {})
+        if str(locus.get("contig", "")) != ag_chrom:
+            raise ValueError(
+                f"canonical locus chromosome differs from AG chromosome: {task_id}"
+            )
+        chromosome = ag_chrom
+    elif adapter == "generic":
+        chromosome = str(task.get("core", {}).get("locus", {}).get("contig", ""))
+    else:
+        raise ValueError(f"unsupported adapter for snapshot publication: {adapter}")
+    if _SNAPSHOT_CHROMOSOME.fullmatch(chromosome) is None:
+        raise ValueError(f"snapshot chromosome is unsafe or non-canonical: {chromosome}")
+    return chromosome, f"snapshots/{chromosome}/{task_id}.png"
+
+
+def _snapshot_source(run_dir: Path, result: Mapping[str, Any]) -> tuple[Path, str]:
+    task_id = str(result["task_id"])
+    artifacts = result.get("artifacts")
+    artifact = artifacts.get("review_image") if isinstance(artifacts, Mapping) else None
+    if not isinstance(artifact, Mapping):
+        raise ValueError(f"eligible case lacks its combined snapshot: {task_id}")
+    relative = Path(str(artifact.get("relative_path", "")))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"combined snapshot path is unsafe: {task_id}")
+    source = (run_dir / relative).resolve(strict=True)
+    try:
+        source.relative_to(run_dir.resolve(strict=True))
+    except ValueError as exc:
+        raise ValueError(f"combined snapshot escapes the run root: {task_id}") from exc
+    if source.is_symlink() or not source.is_file():
+        raise ValueError(f"combined snapshot must be a regular file: {task_id}")
+    expected_sha = str(artifact.get("sha256", ""))
+    if not re.fullmatch(r"[a-f0-9]{64}", expected_sha):
+        raise ValueError(f"combined snapshot lacks a SHA-256: {task_id}")
+    if source.stat().st_size != int(artifact.get("size", -1)):
+        raise ValueError(f"combined snapshot size drift: {task_id}")
+    if sha256_file(source) != expected_sha:
+        raise ValueError(f"combined snapshot checksum drift: {task_id}")
+    return source, expected_sha
+
+
 def _write_direct_output_tables(
     run_dir: Path,
     canonical_tasks: list[dict[str, Any]],
@@ -286,45 +391,59 @@ def _write_direct_output_tables(
     snapshot_fields = [
         "manifest_order",
         "task_id",
+        "chromosome",
+        "relative_path",
+        "sha256",
         "status",
-        "adapter_type",
-        "scientific_interpretation",
-        "review_png",
-        "review_sha256",
-        "raw_igv_png",
-        "raw_igv_sha256",
-        "case_result_json",
-        "input_fingerprint",
     ]
     failure_fields = [
         "manifest_order",
         "task_id",
         "failure_code",
         "message",
-        "case_result_json",
+        "chromosome",
         "input_fingerprint",
     ]
     snapshot_rows: list[dict[str, Any]] = []
     failure_rows: list[dict[str, Any]] = []
+    snapshots_root = run_dir / "snapshots"
+    snapshots_root.mkdir(parents=True, exist_ok=True)
+    if snapshots_root.is_symlink() or not snapshots_root.is_dir():
+        raise ValueError("snapshot output root must be a regular directory")
+    tasks_by_id = {str(task["task_id"]): task for task in canonical_tasks}
+    relative_owners: dict[str, str] = {}
     for result in case_results:
         task_id = str(result["task_id"])
-        artifacts = result["artifacts"]
-        review = artifacts.get("review_image") or {}
-        raw = artifacts.get("raw_igv") or {}
-        case_result_relative = f"results/cases/{task_id}/case_result.json"
+        chromosome, relative_path = _snapshot_target(tasks_by_id[task_id])
+        previous_owner = relative_owners.setdefault(relative_path, task_id)
+        if previous_owner != task_id:
+            raise ValueError(
+                f"snapshot target collision: {relative_path}: {previous_owner}:{task_id}"
+            )
+        snapshot_sha = ""
+        if result["eligible"]:
+            source, snapshot_sha = _snapshot_source(run_dir, result)
+            target = run_dir / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() or target.is_symlink():
+                if target.is_symlink() or not target.is_file():
+                    raise ValueError(f"snapshot target is not a regular file: {relative_path}")
+                if sha256_file(target) != snapshot_sha:
+                    raise ValueError(
+                        f"snapshot target exists with a different checksum: {relative_path}"
+                    )
+            else:
+                shutil.copyfile(source, target)
+                if sha256_file(target) != snapshot_sha:
+                    raise ValueError(f"snapshot copy checksum drift: {relative_path}")
         snapshot_rows.append(
             {
                 "manifest_order": result["manifest_order"],
                 "task_id": task_id,
+                "chromosome": chromosome,
+                "relative_path": relative_path if result["eligible"] else "",
+                "sha256": snapshot_sha,
                 "status": "SNAPSHOT_READY" if result["eligible"] else "CASE_FAILED",
-                "adapter_type": result["adapter_type"],
-                "scientific_interpretation": result["scientific_interpretation"],
-                "review_png": review.get("relative_path", ""),
-                "review_sha256": review.get("sha256", ""),
-                "raw_igv_png": raw.get("relative_path", ""),
-                "raw_igv_sha256": raw.get("sha256", ""),
-                "case_result_json": case_result_relative,
-                "input_fingerprint": result["input_fingerprint"],
             }
         )
         for failure in result["failures"]:
@@ -332,9 +451,9 @@ def _write_direct_output_tables(
                 {
                     "manifest_order": result["manifest_order"],
                     "task_id": task_id,
+                    "chromosome": chromosome,
                     "failure_code": failure["code"],
                     "message": failure["message"],
-                    "case_result_json": case_result_relative,
                     "input_fingerprint": result["input_fingerprint"],
                 }
             )
@@ -743,10 +862,10 @@ def _write_run_summary(run_dir: Path, summary: dict[str, Any]) -> dict[str, Any]
 
     source_digests: dict[str, str] = {}
     for label, relative in (
-        ("canonical_tasks", Path("contract/tasks.jsonl")),
-        ("run_identity", Path("contract/run_identity.json")),
-        ("controller_runtime", Path("contract/controller_runtime.json")),
-        ("shard_plan", Path("shards/shard_plan.json")),
+        ("canonical_tasks", Path(".igv-pipeline/contract/tasks.jsonl")),
+        ("run_identity", Path(".igv-pipeline/contract/run_identity.json")),
+        ("controller_runtime", Path(".igv-pipeline/contract/controller_runtime.json")),
+        ("shard_plan", Path(".igv-pipeline/shards/shard_plan.json")),
         ("snapshots", Path("snapshots.tsv")),
         ("failed_cases", Path("failed_cases.tsv")),
         ("trace_projection", Path("reports/trace.txt")),

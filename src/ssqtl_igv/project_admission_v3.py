@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import fcntl
 import json
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -27,8 +30,30 @@ from .utils import (
     reject_symlink_path_components,
     sha256_file,
     sha256_json,
+    utc_now,
     write_jsonl,
+    write_tsv,
 )
+
+
+_SNAPSHOT_FIELDS = (
+    "manifest_order",
+    "task_id",
+    "chromosome",
+    "relative_path",
+    "sha256",
+    "status",
+)
+_FAILURE_FIELDS = (
+    "manifest_order",
+    "task_id",
+    "chromosome",
+    "failure_code",
+    "message",
+    "input_fingerprint",
+)
+_SAFE_SNAPSHOT_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,250}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 from .v3_manifest import normalize_generic_manifest
 
 
@@ -493,8 +518,14 @@ def finalize_cases(
         output_dir, label="finalized case output"
     )
     try:
-        shutil.copytree(admission / "contract", staging / "contract")
-        shutil.copytree(admission / "shards", staging / "shards")
+        provenance = staging / ".igv-pipeline"
+        shutil.copytree(admission / "contract", provenance / "contract")
+        shutil.copytree(admission / "shards", provenance / "shards")
+        # The admission helpers still validate against their established
+        # internal paths.  They are removed before the public generation is
+        # committed, so review.png/raw IGV images remain Nextflow work data.
+        shutil.copytree(provenance / "contract", staging / "contract")
+        shutil.copytree(provenance / "shards", staging / "shards")
         session = staging / ".case-admission"
         case_outputs = session / "case_outputs"
         case_outputs.mkdir(parents=True)
@@ -510,26 +541,47 @@ def finalize_cases(
         shutil.rmtree(session)
         case_results, failures = _validated_terminal_case_results(staging, tasks)
         direct_outputs = _write_direct_output_tables(staging, tasks, case_results)
+        provenance_cases = provenance / "cases"
+        provenance_cases.mkdir()
+        for result in case_results:
+            task_id = str(result["task_id"])
+            source = staging / "results" / "cases" / task_id
+            target = provenance_cases / task_id
+            target.mkdir()
+            for artifact in source.rglob("*"):
+                if artifact.is_symlink():
+                    raise ValueError(
+                        f"case provenance contains a symlink: {task_id}:{artifact}"
+                    )
+                if not artifact.is_file() or artifact.suffix.lower() == ".png":
+                    continue
+                relative = artifact.relative_to(source)
+                destination_artifact = target / relative
+                destination_artifact.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(artifact, destination_artifact)
+        shutil.rmtree(staging / "results")
+        shutil.rmtree(staging / "contract")
+        shutil.rmtree(staging / "shards")
         summary = {
             "schema_version": "3.0",
             "pipeline_version": "3.0.0",
             "status": "CASE_FAILURES" if failures else "SNAPSHOTS_READY",
             "exit_code": 2 if failures else 0,
             "profile": _object(
-                staging / "contract" / "run_identity.json", label="run identity"
+                provenance / "contract" / "run_identity.json", label="run identity"
             )["profile"],
             "expected_case_count": len(tasks),
             "observed_case_count": len(case_results),
             "failed_case_ids": failures,
             "shards": _object(
-                staging / "shards" / "shard_plan.json", label="logical shard plan"
+                provenance / "shards" / "shard_plan.json", label="logical shard plan"
             )["shards"],
             "direct_outputs": direct_outputs,
             "publication_state": "NOT_READY",
             "human_review_required": False,
             "review_gate": False,
             "effective_max_parallel": _object(
-                staging / "contract" / "execution_policy.json",
+                provenance / "contract" / "execution_policy.json",
                 label="execution policy",
             )["concurrency"]["effective_max_parallel"],
         }
@@ -543,3 +595,247 @@ def finalize_cases(
         "output_dir": str(destination),
         "run_summary": str(destination / "run_summary.json"),
     }
+
+
+def _read_product_tsv(
+    root: Path, name: str, expected_fields: tuple[str, ...]
+) -> list[dict[str, str]]:
+    path = root / name
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"snapshot product lacks regular {name}: {root}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if tuple(reader.fieldnames or ()) != expected_fields:
+            raise ValueError(f"snapshot product {name} field contract differs")
+        return [{key: str(value or "") for key, value in row.items()} for row in reader]
+
+
+def _validate_snapshot_product(root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    if root.is_symlink() or not root.resolve(strict=True).is_dir():
+        raise ValueError(f"snapshot product must be a regular directory: {root}")
+    root = root.resolve(strict=True)
+    rows = _read_product_tsv(root, "snapshots.tsv", _SNAPSHOT_FIELDS)
+    failures = _read_product_tsv(root, "failed_cases.tsv", _FAILURE_FIELDS)
+    task_ids: set[str] = set()
+    orders: set[int] = set()
+    image_paths: set[str] = set()
+    snapshot_root = root / "snapshots"
+    if snapshot_root.is_symlink() or not snapshot_root.is_dir():
+        raise ValueError("snapshot product lacks its snapshots directory")
+    for row in rows:
+        task_id = row["task_id"]
+        try:
+            order = int(row["manifest_order"])
+        except ValueError as exc:
+            raise ValueError(f"snapshot manifest_order is invalid: {task_id}") from exc
+        if (
+            _SAFE_SNAPSHOT_COMPONENT.fullmatch(task_id) is None
+            or _SAFE_SNAPSHOT_COMPONENT.fullmatch(row["chromosome"]) is None
+            or task_id in task_ids
+            or order < 1
+            or order in orders
+        ):
+            raise ValueError("snapshot product contains duplicate/invalid task identity")
+        task_ids.add(task_id)
+        orders.add(order)
+        expected_relative = f"snapshots/{row['chromosome']}/{task_id}.png"
+        if row["status"] == "SNAPSHOT_READY":
+            if _SHA256.fullmatch(row["sha256"]) is None:
+                raise ValueError(f"snapshot checksum is malformed: {task_id}")
+            if row["relative_path"] != expected_relative:
+                raise ValueError(f"snapshot relative path differs from task identity: {task_id}")
+            if row["relative_path"] in image_paths:
+                raise ValueError(f"snapshot product contains a path collision: {task_id}")
+            image_paths.add(row["relative_path"])
+            image = root / row["relative_path"]
+            if image.is_symlink() or not image.is_file():
+                raise ValueError(f"snapshot image is unavailable: {task_id}")
+            if sha256_file(image) != row["sha256"]:
+                raise ValueError(f"snapshot image checksum drift: {task_id}")
+        elif row["status"] == "CASE_FAILED":
+            if row["relative_path"] or row["sha256"]:
+                raise ValueError(f"failed case exposes a snapshot: {task_id}")
+        else:
+            raise ValueError(f"snapshot product contains an unknown status: {task_id}")
+    observed_pngs = {
+        str(path.relative_to(root))
+        for path in snapshot_root.rglob("*.png")
+        if path.is_file() and not path.is_symlink()
+    }
+    if observed_pngs != image_paths:
+        raise ValueError("snapshot tree differs from snapshots.tsv")
+    failure_tasks = {row["task_id"] for row in failures}
+    expected_failures = {row["task_id"] for row in rows if row["status"] == "CASE_FAILED"}
+    if failure_tasks != expected_failures:
+        raise ValueError("failed_cases.tsv differs from snapshot failure coverage")
+    return rows, failures
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def merge_snapshot_outputs(
+    destination_dir: str | Path, incoming_dir: str | Path
+) -> dict[str, Any]:
+    """Append one immutable batch product without overwriting prior snapshots.
+
+    The full next chromosome tree is prepared under the destination filesystem.
+    A short exclusive lock then swaps only complete trees/files using POSIX
+    rename. Replaying an identical task/checksum is idempotent; any divergent
+    task, manifest order, or filename collision fails closed.
+    """
+
+    destination = Path(destination_dir).expanduser().resolve(strict=True)
+    incoming = Path(incoming_dir).expanduser().resolve(strict=True)
+    if destination == incoming:
+        raise ValueError("incoming snapshot product must differ from destination")
+    destination_rows, destination_failures = _validate_snapshot_product(destination)
+    incoming_rows, incoming_failures = _validate_snapshot_product(incoming)
+    control = destination / ".igv-pipeline"
+    if control.is_symlink() or not control.is_dir():
+        raise ValueError("destination lacks its internal snapshot control directory")
+    lock_path = control / "snapshot-publication.lock"
+    if lock_path.is_symlink():
+        raise ValueError("snapshot publication lock must not be a symlink")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        # Re-read while holding the lock so a concurrent completed batch cannot
+        # be silently discarded by a stale pre-lock view.
+        destination_rows, destination_failures = _validate_snapshot_product(destination)
+        rows_by_task = {row["task_id"]: row for row in destination_rows}
+        orders = {int(row["manifest_order"]): row["task_id"] for row in destination_rows}
+        paths = {
+            row["relative_path"]: row["task_id"]
+            for row in destination_rows
+            if row["relative_path"]
+        }
+        new_rows = 0
+        for row in incoming_rows:
+            existing = rows_by_task.get(row["task_id"])
+            if existing is not None:
+                if existing != row:
+                    raise ValueError(
+                        "snapshot task already exists with different metadata/checksum: "
+                        f"{row['task_id']}"
+                    )
+                continue
+            order = int(row["manifest_order"])
+            if order in orders:
+                raise ValueError(
+                    f"snapshot manifest_order collision: {order}:{orders[order]}:{row['task_id']}"
+                )
+            relative = row["relative_path"]
+            if relative and relative in paths:
+                raise ValueError(
+                    f"snapshot filename collision: {relative}:{paths[relative]}:{row['task_id']}"
+                )
+            rows_by_task[row["task_id"]] = row
+            orders[order] = row["task_id"]
+            if relative:
+                paths[relative] = row["task_id"]
+            new_rows += 1
+        incoming_failure_map = {row["task_id"]: row for row in incoming_failures}
+        failure_map = {row["task_id"]: row for row in destination_failures}
+        for task_id, row in incoming_failure_map.items():
+            existing = failure_map.get(task_id)
+            if existing is not None and existing != row:
+                raise ValueError(f"failed-case metadata collision: {task_id}")
+            failure_map[task_id] = row
+        if new_rows == 0:
+            return {
+                "schema_version": "3.0-snapshot-merge",
+                "status": "IDEMPOTENT",
+                "added_case_count": 0,
+                "total_case_count": len(destination_rows),
+                "snapshots_sha256": sha256_file(destination / "snapshots.tsv"),
+            }
+
+        staging = control / f".snapshot-merge-{uuid.uuid4().hex}"
+        backup = control / f".snapshot-backup-{uuid.uuid4().hex}"
+        staging.mkdir(mode=0o700)
+        backup.mkdir(mode=0o700)
+        try:
+            shutil.copytree(destination / "snapshots", staging / "snapshots")
+            destination_task_ids = {item["task_id"] for item in destination_rows}
+            for row in incoming_rows:
+                if (
+                    row["task_id"] not in destination_task_ids
+                    and row["status"] == "SNAPSHOT_READY"
+                ):
+                    source = incoming / row["relative_path"]
+                    target = staging / row["relative_path"]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        if sha256_file(target) != row["sha256"]:
+                            raise ValueError(
+                                "snapshot target exists with a different checksum: "
+                                f"{row['relative_path']}"
+                            )
+                    else:
+                        shutil.copyfile(source, target)
+                    if sha256_file(target) != row["sha256"]:
+                        raise ValueError(f"staged snapshot checksum drift: {row['task_id']}")
+            merged_rows = sorted(rows_by_task.values(), key=lambda row: int(row["manifest_order"]))
+            merged_failures = sorted(
+                failure_map.values(), key=lambda row: int(row["manifest_order"])
+            )
+            write_tsv(staging / "snapshots.tsv", list(_SNAPSHOT_FIELDS), merged_rows)
+            write_tsv(staging / "failed_cases.tsv", list(_FAILURE_FIELDS), merged_failures)
+            summary = {
+                "schema_version": "3.0",
+                "pipeline_version": "3.0.0",
+                "authoritative": False,
+                "projection_kind": "UX_ONLY",
+                "status": "CASE_FAILURES" if merged_failures else "SNAPSHOTS_READY",
+                "exit_code": 2 if merged_failures else 0,
+                "expected_case_count": len(merged_rows),
+                "observed_case_count": len(merged_rows),
+                "failed_case_count": len(merged_failures),
+                "publication_state": "SNAPSHOTS_READY",
+                "updated_at": utc_now(),
+                "source_digests": {
+                    "snapshots": sha256_file(staging / "snapshots.tsv"),
+                    "failed_cases": sha256_file(staging / "failed_cases.tsv"),
+                },
+            }
+            atomic_write_json(staging / "run_summary.json", summary)
+            _validate_snapshot_product(staging)
+            names = ("snapshots", "snapshots.tsv", "failed_cases.tsv", "run_summary.json")
+            backed_up: list[str] = []
+            installed: list[str] = []
+            try:
+                for name in names:
+                    os.replace(destination / name, backup / name)
+                    backed_up.append(name)
+                for name in names:
+                    os.replace(staging / name, destination / name)
+                    installed.append(name)
+                _fsync_directory(destination)
+            except BaseException:
+                for name in reversed(installed):
+                    if (destination / name).exists():
+                        os.replace(destination / name, staging / name)
+                for name in reversed(backed_up):
+                    if (backup / name).exists():
+                        os.replace(backup / name, destination / name)
+                _fsync_directory(destination)
+                raise
+            shutil.rmtree(backup)
+            shutil.rmtree(staging)
+            return {
+                "schema_version": "3.0-snapshot-merge",
+                "status": "PUBLISHED",
+                "commit_mode": "LOCKED_POSIX_RENAME_NFS_COMPAT",
+                "added_case_count": new_rows,
+                "total_case_count": len(merged_rows),
+                "snapshots_sha256": sha256_file(destination / "snapshots.tsv"),
+            }
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(backup, ignore_errors=True)
+            raise

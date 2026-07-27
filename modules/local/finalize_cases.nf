@@ -4,7 +4,9 @@ process FINALIZE_CASES {
     label 'aggregate'
     cache 'deep'
 
-    publishDir "${params.output}", mode: 'copy', overwrite: false
+    // FINALIZE_CASES is terminal.  With the documented /output/.work default,
+    // move publishes each fully staged tree/file by same-filesystem rename.
+    publishDir "${params.output}", mode: 'move', overwrite: false
 
     input:
     path admission_bundle, stageAs: 'source/admission'
@@ -13,9 +15,8 @@ process FINALIZE_CASES {
     val allow_debug_only
 
     output:
-    path 'results', emit: results
-    path 'contract', emit: contract
-    path 'shards', emit: shards
+    path 'snapshots', emit: snapshot_files
+    path '.igv-pipeline', emit: provenance
     path 'snapshots.tsv', emit: snapshots
     path 'failed_cases.tsv', emit: failures
     path 'run_summary.json', emit: summary
@@ -31,9 +32,8 @@ process FINALIZE_CASES {
         --case-bundle-root source/case_bundles \
         --output-dir finalized \
         ${debugArg}
-    mv finalized/results results
-    mv finalized/contract contract
-    mv finalized/shards shards
+    mv finalized/snapshots snapshots
+    mv finalized/.igv-pipeline .igv-pipeline
     mv finalized/snapshots.tsv snapshots.tsv
     mv finalized/failed_cases.tsv failed_cases.tsv
     mv finalized/run_summary.json run_summary.json
@@ -41,13 +41,13 @@ process FINALIZE_CASES {
 
     stub:
     """
-    mkdir -p results/cases contract shards
-    cp -L '${admission_bundle}/contract/tasks.jsonl' contract/tasks.jsonl
-    cp -L '${admission_bundle}/contract/run_identity.json' contract/run_identity.json
-    cp -L '${admission_bundle}/contract/execution_policy.json' contract/execution_policy.json
-    cp -L '${admission_bundle}/shards/shard_plan.json' shards/shard_plan.json
-    printf 'manifest_order\ttask_id\tstatus\tadapter_type\tscientific_interpretation\treview_png\treview_sha256\traw_igv_png\traw_igv_sha256\tcase_result_json\tinput_fingerprint\n' > snapshots.tsv
-    printf 'manifest_order\ttask_id\tfailure_code\tmessage\tcase_result_json\tinput_fingerprint\n' > failed_cases.tsv
+    mkdir -p snapshots .igv-pipeline/contract .igv-pipeline/shards .igv-pipeline/cases
+    cp -L '${admission_bundle}/contract/tasks.jsonl' .igv-pipeline/contract/tasks.jsonl
+    cp -L '${admission_bundle}/contract/run_identity.json' .igv-pipeline/contract/run_identity.json
+    cp -L '${admission_bundle}/contract/execution_policy.json' .igv-pipeline/contract/execution_policy.json
+    cp -L '${admission_bundle}/shards/shard_plan.json' .igv-pipeline/shards/shard_plan.json
+    printf 'manifest_order\ttask_id\tchromosome\trelative_path\tsha256\tstatus\n' > snapshots.tsv
+    printf 'manifest_order\ttask_id\tchromosome\tfailure_code\tmessage\tinput_fingerprint\n' > failed_cases.tsv
     printf '{"schema_version":"3.0","pipeline_version":"3.0.0","authoritative":false,"projection_kind":"UX_ONLY","status":"STUB","exit_code":0,"expected_case_count":0,"observed_case_count":0,"failed_case_count":0}\n' > run_summary.json
     """
 }

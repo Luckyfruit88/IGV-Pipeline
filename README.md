@@ -120,14 +120,33 @@ the same DAG and maps the finalized result to the product exit codes below.
 
 ```text
 output/
-├── results/cases/<task_id>/review.png
-├── results/cases/<task_id>/raw/igv.png
-├── results/cases/<task_id>/case_result.json
+├── snapshots/
+│   ├── chr11/
+│   │   └── AG_chr11_62598143_62598142__SNP_chr11_62598147_T_C.png
+│   └── chr13/
+│       └── AG_chr13_49533821_49533820__SNP_chr13_49533837_C_G.png
 ├── snapshots.tsv
 ├── failed_cases.tsv
 ├── run_summary.json
 └── reports/trace.txt
 ```
+
+Each successful case publishes exactly one combined PNG. Its filename is the
+canonical `task_id + ".png"`, and its directory is the AG chromosome. Original
+AG coordinate order is preserved, including reverse-strand coordinates. ssQTL
+tasks fail closed if the AG chromosome, SNP chromosome, task ID, or canonical
+payload disagree. Internal `review.png` and raw IGV captures remain in the
+Nextflow work directory and are not part of the product output.
+
+`snapshots.tsv` is ordered by `manifest_order` and contains exactly
+`manifest_order`, `task_id`, `chromosome`, `relative_path`, `sha256`, and
+`status`. Re-publishing the same task/checksum is idempotent; a name collision
+with a different checksum is rejected. Completed chromosome trees are staged
+before publication, so users do not observe case-by-case image arrival.
+
+The automatic screenshot workflow does not create scientific labels such as
+`VISUAL_DISCORDANT`. Scientific interpretation remains an optional later human
+review projection.
 
 Exit codes:
 
@@ -490,14 +509,30 @@ nextflow run Luckyfruit88/IGV-Pipeline \
 
 ```text
 output/
-├── results/cases/<task_id>/review.png
-├── results/cases/<task_id>/raw/igv.png
-├── results/cases/<task_id>/case_result.json
+├── snapshots/
+│   ├── chr11/
+│   │   └── AG_chr11_62598143_62598142__SNP_chr11_62598147_T_C.png
+│   └── chr13/
+│       └── AG_chr13_49533821_49533820__SNP_chr13_49533837_C_G.png
 ├── snapshots.tsv
 ├── failed_cases.tsv
 ├── run_summary.json
 └── reports/trace.txt
 ```
+
+每个成功 case 只发布一张合并 PNG。文件名固定为 canonical
+`task_id + ".png"`，目录名来自 AG chromosome。AG 原始坐标顺序保持不变，
+包括负链倒序坐标。若 ssQTL task 的 AG chromosome、SNP chromosome、task ID
+或 canonical payload 不一致，流程会 fail closed。内部 `review.png` 和原始 IGV
+截图只保留在 Nextflow work 目录，不属于产品输出。
+
+`snapshots.tsv` 按 `manifest_order` 排序，字段固定为 `manifest_order`、
+`task_id`、`chromosome`、`relative_path`、`sha256` 和 `status`。同一 task 与
+checksum 的重复发布视为幂等完成；同名但 checksum 不同则拒绝覆盖。全部染色体
+目录和 PNG 会先完成 staging，再进入产品目录，用户不会看到逐 case 到达的半成品。
+
+自动截图流程不会创建 `VISUAL_DISCORDANT` 等科学分类；此类解释只能在后续可选的
+人工审核阶段投影生成。
 
 退出码：
 

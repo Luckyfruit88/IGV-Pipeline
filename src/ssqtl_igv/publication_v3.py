@@ -18,6 +18,7 @@ from .publication import (
     atomic_rename_noreplace,
     verify_checksum_tree,
 )
+from .product_paths_v3 import cases_root, resolve_case_artifact
 from .review_server import verify_finalized_review_generation
 from .utils import (
     atomic_write_json,
@@ -122,20 +123,18 @@ def _campaign_binding(receipt: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def _safe_artifact(run_root: Path, record: Mapping[str, Any]) -> Path:
+def _safe_artifact(
+    run_root: Path,
+    case_result: Mapping[str, Any],
+    role: str,
+    record: Mapping[str, Any],
+) -> Path:
     relative = Path(str(record.get("relative_path", "")))
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise ValueError(f"unsafe review artifact path: {relative}")
-    candidate = run_root / relative
-    if candidate.is_symlink() or not candidate.is_file():
-        raise ValueError(f"review artifact is unavailable or symlinked: {candidate}")
-    resolved = candidate.resolve(strict=True)
-    try:
-        resolved.relative_to(run_root)
-    except ValueError as exc:
-        raise ValueError(f"review artifact escapes run root: {candidate}") from exc
+    resolved = resolve_case_artifact(run_root, case_result, role, record)
     if sha256_file(resolved) != str(record.get("sha256", "")):
-        raise ValueError(f"review artifact checksum drift: {candidate}")
+        raise ValueError(f"review artifact checksum drift: {resolved}")
     assert_production_artifact(resolved, label="publication source artifact")
     return resolved
 
@@ -257,7 +256,7 @@ def build_publication_staging(
         rejected_count = 0
         for record in sorted(records, key=lambda row: int(row["manifest_order"])):
             task_id = str(record["task_id"])
-            result_path = run_root / "results" / "cases" / task_id / "case_result.json"
+            result_path = cases_root(run_root) / task_id / "case_result.json"
             result = _object(result_path, label="v3 case result")
             if sha256_file(result_path) != record.get("case_result_sha256"):
                 raise ValueError(f"case result differs from review binding: {task_id}")
@@ -280,7 +279,7 @@ def build_publication_staging(
                 artifact = result.get("artifacts", {}).get("review_image")
                 if not isinstance(artifact, Mapping):
                     raise ValueError(f"approved case lacks review image: {task_id}")
-                source = _safe_artifact(run_root, artifact)
+                source = _safe_artifact(run_root, result, "review_image", artifact)
                 if artifact.get("sha256") != record.get("review_image_sha256"):
                     raise ValueError(
                         f"review image differs from review binding: {task_id}"

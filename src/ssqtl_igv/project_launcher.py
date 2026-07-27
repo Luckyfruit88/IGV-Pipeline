@@ -208,7 +208,14 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
     if root.is_symlink() or not root.resolve(strict=True).is_dir():
         raise ValueError(f"completed output must be a regular non-symlink directory: {root}")
     root = root.resolve(strict=True)
-    tasks_path = root / "contract" / "tasks.jsonl"
+    contract_root = root / "contract"
+    case_root_parent = root / "results" / "cases"
+    direct_product = False
+    if not contract_root.is_dir():
+        contract_root = root / ".igv-pipeline" / "contract"
+        case_root_parent = root / ".igv-pipeline" / "cases"
+        direct_product = True
+    tasks_path = contract_root / "tasks.jsonl"
     if tasks_path.is_symlink() or not tasks_path.is_file():
         raise ValueError("completed run is missing its canonical task set")
     tasks = list(read_jsonl(tasks_path))
@@ -221,7 +228,7 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
     failed: list[str] = []
     bundle_digests: list[dict[str, str]] = []
     for task_id in task_ids:
-        case_root = root / "results" / "cases" / task_id
+        case_root = case_root_parent / task_id
         case_path = case_root / "case_result.json"
         bundle_path = case_root / "terminal_bundle.json"
         case_document = _read_json_object(case_path, label=f"case result {task_id}")
@@ -236,6 +243,46 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
         bundle_digests.append(
             {"task_id": task_id, "sha256": sha256_file(bundle_path)}
         )
+
+    if direct_product:
+        with (root / "snapshots.tsv").open(encoding="utf-8", newline="") as handle:
+            snapshot_rows = list(csv.DictReader(handle, delimiter="\t"))
+        snapshot_fields = list(snapshot_rows[0].keys()) if snapshot_rows else []
+        if snapshot_fields != [
+            "manifest_order",
+            "task_id",
+            "chromosome",
+            "relative_path",
+            "sha256",
+            "status",
+        ]:
+            raise ValueError("snapshots.tsv uses an unexpected field contract")
+        if [row["task_id"] for row in snapshot_rows] != task_ids:
+            raise ValueError("snapshots.tsv task order differs from canonical tasks")
+        for row in snapshot_rows:
+            task_id = row["task_id"]
+            result = _read_json_object(
+                case_root_parent / task_id / "case_result.json",
+                label=f"case result {task_id}",
+            )
+            if bool(result.get("eligible")):
+                if row["status"] != "SNAPSHOT_READY":
+                    raise ValueError(f"eligible case lacks SNAPSHOT_READY: {task_id}")
+                relative = Path(row["relative_path"])
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError(f"snapshot path is unsafe: {task_id}")
+                snapshot = root / relative
+                if snapshot.is_symlink() or not snapshot.is_file():
+                    raise ValueError(f"snapshot is unavailable: {task_id}")
+                expected_sha = str(
+                    result.get("artifacts", {})
+                    .get("review_image", {})
+                    .get("sha256", "")
+                )
+                if row["sha256"] != expected_sha or sha256_file(snapshot) != expected_sha:
+                    raise ValueError(f"snapshot checksum differs from terminal evidence: {task_id}")
+            elif row["status"] != "CASE_FAILED" or row["relative_path"] or row["sha256"]:
+                raise ValueError(f"failed case exposes a snapshot: {task_id}")
 
     trace_path = root / "reports" / "trace.txt"
     lineage = _case_trace_lineage(trace_path, set(task_ids))

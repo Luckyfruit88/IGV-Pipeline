@@ -25,9 +25,10 @@ def verify(
     expected_adapter: str | None,
 ) -> dict[str, Any]:
     root = output.expanduser().resolve(strict=True)
+    provenance = root / ".igv-pipeline"
     tasks = [
         json.loads(line)
-        for line in (root / "contract" / "tasks.jsonl")
+        for line in (provenance / "contract" / "tasks.jsonl")
         .read_text(encoding="utf-8")
         .splitlines()
         if line.strip()
@@ -38,19 +39,38 @@ def verify(
     if expected_adapter is not None:
         assert {str(task["adapter_id"]) for task in tasks} == {expected_adapter}
 
-    shard_plan = _object(root / "shards" / "shard_plan.json")
+    shard_plan = _object(provenance / "shards" / "shard_plan.json")
     assert shard_plan["scheduling_role"] == "LOGICAL_ONLY"
     assert sum(int(row["case_count"]) for row in shard_plan["shards"]) == expected_cases
 
     for task_id in task_ids:
-        case_root = root / "results" / "cases" / task_id
+        case_root = provenance / "cases" / task_id
         for relative in (
             "terminal_bundle.json",
             "case_result.json",
-            "raw/igv.png",
-            "review.png",
         ):
             assert (case_root / relative).is_file(), f"missing {task_id}/{relative}"
+
+    with (root / "snapshots.tsv").open(encoding="utf-8", newline="") as handle:
+        snapshot_rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["task_id"] for row in snapshot_rows] == task_ids
+    assert list(snapshot_rows[0]) == [
+        "manifest_order",
+        "task_id",
+        "chromosome",
+        "relative_path",
+        "sha256",
+        "status",
+    ]
+    for row in snapshot_rows:
+        if row["status"] == "SNAPSHOT_READY":
+            assert (root / row["relative_path"]).is_file()
+        else:
+            assert row["status"] == "CASE_FAILED"
+            assert not row["relative_path"] and not row["sha256"]
+    assert not list(provenance.rglob("review.png"))
+    assert not list(provenance.rglob("igv.png"))
+    assert not (root / "results").exists()
 
     assert not (root / "reports" / "case_outputs").exists()
     postflight = validate_project_postflight(root)

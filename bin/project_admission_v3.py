@@ -9,6 +9,7 @@ from pathlib import Path
 from ssqtl_igv.project_admission_v3 import (
     admit_project_tasks,
     finalize_cases,
+    merge_snapshot_outputs,
     resolve_project_entry,
 )
 
@@ -46,6 +47,10 @@ def _parser() -> argparse.ArgumentParser:
     finalize.add_argument("--case-bundle-root", required=True)
     finalize.add_argument("--output-dir", required=True)
     finalize.add_argument("--allow-debug-only", action="store_true")
+
+    merge = commands.add_parser("merge-snapshots")
+    merge.add_argument("--destination", required=True)
+    merge.add_argument("--incoming", required=True)
     return parser
 
 
@@ -70,13 +75,15 @@ def main(argv: list[str] | None = None) -> int:
             max_cases_per_shard=args.max_cases_per_shard,
             allow_staged_symlink=args.allow_staged_symlink,
         )
-    else:
+    elif args.command == "finalize":
         result = finalize_cases(
             args.admission_bundle,
             args.case_bundle_root,
             args.output_dir,
             allow_debug_only=args.allow_debug_only,
         )
+    else:
+        result = merge_snapshot_outputs(args.destination, args.incoming)
     print(json.dumps(result, sort_keys=True))
     return 0
 

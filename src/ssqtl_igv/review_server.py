@@ -26,6 +26,7 @@ from .artifact_admission_v3 import (
 from .campaign_v3 import LEDGER_EVENT_TYPES, append_campaign_event, verify_campaign_ledger
 from .evidence_v3 import locate_verified_accounting
 from .publication import verify_checksum_tree
+from .product_paths_v3 import cases_root, contract_root, resolve_case_artifact
 from .contracts import V3_GENERIC_MANUAL_ASSERTIONS, V3_SSQTL_MANUAL_ASSERTIONS
 from .utils import (
     atomic_write_json,
@@ -79,7 +80,7 @@ class ReviewContext:
 
     @property
     def campaign_binding_path(self) -> Path:
-        return self.run_root / "contract" / "campaign_binding.json"
+        return contract_root(self.run_root) / "campaign_binding.json"
 
     @property
     def finalized_path(self) -> Path:
@@ -99,15 +100,26 @@ def _load_json_object(path: Path, *, label: str) -> dict[str, Any]:
     return value
 
 
-def _safe_artifact(root: Path, relative_value: Any, expected_sha256: Any) -> tuple[Path, str]:
+def _safe_artifact(
+    root: Path,
+    relative_value: Any,
+    expected_sha256: Any,
+    *,
+    case_result: Mapping[str, Any] | None = None,
+    role: str = "review_image",
+) -> tuple[Path, str]:
     root = root.resolve(strict=True)
     relative = Path(str(relative_value or ""))
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise ValueError(f"review artifact path must be safe and relative: {relative}")
     candidate = root / relative
-    if candidate.is_symlink() or not candidate.is_file():
-        raise ValueError(f"review artifact is unavailable or symlinked: {candidate}")
-    resolved = candidate.resolve(strict=True)
+    if case_result is not None:
+        record = {"relative_path": str(relative), "sha256": str(expected_sha256 or "")}
+        resolved = resolve_case_artifact(root, case_result, role, record)
+    else:
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ValueError(f"review artifact is unavailable or symlinked: {candidate}")
+        resolved = candidate.resolve(strict=True)
     try:
         resolved.relative_to(root)
     except ValueError as exc:
@@ -146,8 +158,9 @@ def _artifact_record(
 
 
 def _authoritative_tasks(run_root: Path) -> list[dict[str, Any]]:
-    tasks_path = run_root / "contract" / "tasks.jsonl"
-    identity_path = run_root / "contract" / "run_identity.json"
+    immutable_contract = contract_root(run_root)
+    tasks_path = immutable_contract / "tasks.jsonl"
+    identity_path = immutable_contract / "run_identity.json"
     if tasks_path.is_symlink() or not tasks_path.is_file():
         raise ValueError("v3 review requires the immutable contract/tasks.jsonl")
     identity = _load_json_object(identity_path, label="v3 run identity")
@@ -192,8 +205,9 @@ def _authoritative_tasks(run_root: Path) -> list[dict[str, Any]]:
 def _runtime_binding(run_root: Path) -> dict[str, Any]:
     """Bind the unsigned runtime manifest and every successful validation receipt."""
 
-    identity_path = run_root / "contract" / "run_identity.json"
-    snapshot_path = run_root / "contract" / "runtime_manifest.snapshot.json"
+    immutable_contract = contract_root(run_root)
+    identity_path = immutable_contract / "run_identity.json"
+    snapshot_path = immutable_contract / "runtime_manifest.snapshot.json"
     if identity_path.is_symlink() or snapshot_path.is_symlink():
         raise ValueError("run identity/runtime manifest snapshot must not be symlinked")
     identity = _load_json_object(identity_path, label="v3 run identity")
@@ -260,17 +274,17 @@ def _runtime_binding(run_root: Path) -> dict[str, Any]:
 
 
 def _contracts_from_case_results(run_root: Path) -> tuple[list[dict[str, Any]], dict[str, Path]]:
-    cases_root = run_root / "results" / "cases"
-    if cases_root.is_symlink() or not cases_root.is_dir():
+    result_cases_root = cases_root(run_root)
+    if result_cases_root.is_symlink() or not result_cases_root.is_dir():
         return [], {}
     try:
-        cases_root.resolve(strict=True).relative_to(run_root)
+        result_cases_root.resolve(strict=True).relative_to(run_root)
     except ValueError as exc:
         raise ValueError("results/cases escapes run_dir through a symlink") from exc
-    assert_production_artifact_tree(cases_root, label="review case-result tree")
+    assert_production_artifact_tree(result_cases_root, label="review case-result tree")
     tasks = _authoritative_tasks(run_root)
     expected_tasks = {str(task["task_id"]): task for task in tasks}
-    case_paths = sorted(cases_root.glob("*/case_result.json"))
+    case_paths = sorted(result_cases_root.glob("*/case_result.json"))
     case_documents: list[tuple[Path, dict[str, Any]]] = []
     observed_tasks: dict[str, dict[str, Any]] = {}
     for path in case_paths:
@@ -330,11 +344,23 @@ def _contracts_from_case_results(run_root: Path) -> tuple[list[dict[str, Any]], 
         if drift:
             raise ValueError(f"case result differs from canonical task {task_id}: {drift}")
         image_relative, image_sha = _artifact_record(case, "review_image", required=True)
-        image_path, image_digest = _safe_artifact(run_root, image_relative, image_sha)
+        image_path, image_digest = _safe_artifact(
+            run_root,
+            image_relative,
+            image_sha,
+            case_result=case,
+            role="review_image",
+        )
         qc_relative, qc_sha = _artifact_record(case, "scientific_qc", required=False)
         qc_digest: str | None = None
         if qc_relative is not None:
-            _qc_path, qc_digest = _safe_artifact(run_root, qc_relative, qc_sha)
+            _qc_path, qc_digest = _safe_artifact(
+                run_root,
+                qc_relative,
+                qc_sha,
+                case_result=case,
+                role="scientific_qc",
+            )
         adapter = str(case["adapter_type"]).lower()
         if adapter not in {"generic", "ssqtl"}:
             raise ValueError(f"unsupported review adapter_type: {adapter}")
@@ -395,13 +421,14 @@ def _contracts_from_review_package(
         raise ValueError(f"review package lacks review_contract.jsonl: {package_root}")
     tasks = _authoritative_tasks(run_root)
     accounting = locate_verified_accounting(run_root, tasks)
+    immutable_contract = contract_root(run_root)
     run_identity = _load_json_object(
-        run_root / "contract" / "run_identity.json", label="v3 run identity"
+        immutable_contract / "run_identity.json", label="v3 run identity"
     )
     runtime_binding = _runtime_binding(run_root)
     source_contracts = list(read_jsonl(contract_path))
     contract_set_sha = sha256_json(source_contracts)
-    controller_path = run_root / "contract" / "controller_runtime.json"
+    controller_path = immutable_contract / "controller_runtime.json"
     controller_runtime = _load_json_object(
         controller_path, label="controller runtime identity"
     )
@@ -586,7 +613,7 @@ def _campaign_binding(context: ReviewContext) -> dict[str, Any] | None:
     if campaign_root_value.is_symlink() or not campaign_root_value.resolve(strict=True).is_dir():
         raise ValueError("campaign root must be a regular non-symlink directory")
     campaign_root = campaign_root_value.resolve(strict=True)
-    local_request = context.run_root / "contract" / "batch-request.json"
+    local_request = contract_root(context.run_root) / "batch-request.json"
     if local_request.is_symlink() or not local_request.is_file():
         raise ValueError("campaign run lacks its immutable local batch-request")
     request = _load_json_object(local_request, label="campaign batch-request")
@@ -622,7 +649,7 @@ def _campaign_binding(context: ReviewContext) -> dict[str, Any] | None:
         raise ValueError("campaign review contracts differ from campaign/batch identity")
 
     identity = _load_json_object(
-        context.run_root / "contract" / "run_identity.json", label="v3 run identity"
+        contract_root(context.run_root) / "run_identity.json", label="v3 run identity"
     )
     expected_identity = {
         "campaign_binding_sha256": sha256_file(path),
@@ -1188,7 +1215,7 @@ def verify_finalized_review_generation(
     ):
         raise ValueError("finalized review record/rerun set differs from receipt")
     run_identity = _load_json_object(
-        root.parents[2] / "contract" / "run_identity.json",
+        contract_root(root.parents[2]) / "run_identity.json",
         label="v3 run identity",
     )
     rerun_request_set_sha256 = sha256_json(rerun_rows)
@@ -1623,7 +1650,7 @@ def finalize_review(run_dir: str | Path) -> dict[str, Any]:
                 write_jsonl(staging / "rerun_manifest.jsonl", rerun_rows)
                 rerun_manifest_sha256 = sha256_file(staging / "rerun_manifest.jsonl")
                 run_identity = _load_json_object(
-                    context.run_root / "contract" / "run_identity.json",
+                    contract_root(context.run_root) / "run_identity.json",
                     label="v3 run identity",
                 )
                 request_set_sha256 = sha256_json(rerun_rows)
