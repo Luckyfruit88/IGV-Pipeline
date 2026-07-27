@@ -185,6 +185,18 @@ def _require_unique(values: Iterable[Any], label: str) -> None:
         )
 
 
+def _require_preserved_stage_extension(
+    resource: Mapping[str, Any], *, label: str
+) -> None:
+    declared_suffix = Path(str(resource["declared_path"])).suffix.lower()
+    staged_suffix = Path(str(resource["stage_name"])).suffix.lower()
+    if declared_suffix != staged_suffix:
+        raise ContractValidationError(
+            f"{label} stage_name must preserve terminal extension "
+            f"{declared_suffix!r}, observed {staged_suffix!r}"
+        )
+
+
 def validate_task_document(
     task: Mapping[str, Any], *, schema_dir: str | Path | None = None
 ) -> None:
@@ -299,6 +311,17 @@ def validate_v3_task_document(
         if auxiliary["kind"] != "PDF" and auxiliary["page"] is not None:
             raise ContractValidationError("auxiliary page is only valid for PDF inputs")
     _require_unique(stage_names, "v3 staged input name")
+    for track_number, track in enumerate(tracks, start=1):
+        _require_preserved_stage_extension(
+            track["bam"], label=f"track {track_number} BAM"
+        )
+        _require_preserved_stage_extension(
+            track["bai"], label=f"track {track_number} BAI"
+        )
+    for role, resource in core["reference"]["resources"].items():
+        _require_preserved_stage_extension(resource, label=f"reference {role}")
+    if auxiliary["state"] == "PRESENT":
+        _require_preserved_stage_extension(auxiliary, label="auxiliary")
 
     portable_resources = _without_source_paths(core["reference"]["resources"])
     if core["reference"]["resource_fingerprint"] != sha256_json(portable_resources):

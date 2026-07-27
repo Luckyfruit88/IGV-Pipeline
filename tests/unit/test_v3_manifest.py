@@ -153,6 +153,57 @@ def test_generic_normalization_preserves_case_and_track_order(tmp_path: Path) ->
         )
 
 
+def test_long_dotted_bam_names_preserve_terminal_stage_extensions(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+    bam_name = "359673.accepted_hits.merged.markeddups.recal.bam"
+    bai_name = f"{bam_name}.bai"
+    (input_root / bam_name).write_bytes(b"bam")
+    (input_root / bai_name).write_bytes(b"bai")
+    reference = _write_reference(tmp_path / "reference")
+    manifest = _write_manifest(
+        tmp_path / "cases.tsv",
+        [
+            [
+                "3.0",
+                "case_1",
+                "chr1:10-12",
+                "+",
+                bam_name,
+                bai_name,
+                "A",
+                "",
+                "",
+                "",
+            ]
+        ],
+    )
+
+    result = normalize_generic_manifest(
+        manifest,
+        input_root,
+        reference,
+        tmp_path / "normalized",
+        "run_001",
+        "gen_001",
+    )
+    task = next(read_jsonl(result["tasks"]))
+    track = task["core"]["tracks"][0]
+    assert track["bam"]["stage_name"].endswith(".bam")
+    assert track["bai"]["stage_name"].endswith(".bai")
+    assert len(track["bam"]["stage_name"]) <= 200
+    assert len(track["bai"]["stage_name"]) <= 200
+    validate_v3_task_document(task)
+
+    track["bam"]["stage_name"] = track["bam"]["stage_name"][: -len(".bam")] + ".b"
+    with pytest.raises(
+        ContractValidationError, match="BAM stage_name must preserve terminal extension"
+    ):
+        validate_v3_task_document(task)
+
+
 def test_generic_fingerprint_does_not_depend_on_input_mount_location(tmp_path: Path) -> None:
     manifest, first_root, reference = _fixture(tmp_path)
     second_root = tmp_path / "input-copy"
