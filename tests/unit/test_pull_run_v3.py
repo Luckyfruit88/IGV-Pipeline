@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,155 @@ def test_public_run_parser_exposes_only_pull_and_run_options() -> None:
     assert args.work is None
     assert args.max_parallel == "auto"
     assert args.max_cases_per_shard == 256
+
+
+def test_public_failed_only_parser_matches_run_resource_controls() -> None:
+    parser = v3_cli._parser()
+    rerun_parser = next(
+        action.choices["rerun-failed"]
+        for action in parser._actions
+        if isinstance(action, __import__("argparse")._SubParsersAction)
+    )
+    options = {
+        option
+        for action in rerun_parser._actions
+        for option in action.option_strings
+        if option not in {"-h", "--help"}
+    }
+    assert options == {
+        "--project",
+        "--output",
+        "--work",
+        "--resume",
+        "--max-parallel",
+        "--max-cases-per-shard",
+        "--igv-cpus",
+        "--igv-memory",
+        "--igv-timeout",
+        "--normalization-cpus",
+        "--normalization-memory",
+        "--normalization-timeout",
+    }
+    args = parser.parse_args(["rerun-failed"])
+    assert args.project == "/project/project.yaml"
+    assert args.output == "/output"
+    assert args.max_parallel == "auto"
+
+
+def test_public_failed_only_noop_does_not_launch_a_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    args = v3_cli._parser().parse_args(
+        ["rerun-failed", "--output", str(output)]
+    )
+
+    monkeypatch.setattr(
+        v3_cli,
+        "failed_only_rerun_lock",
+        lambda _output: nullcontext(output),
+    )
+    monkeypatch.setattr(
+        v3_cli,
+        "build_failed_rerun_plan",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a no-op failed-only request must not launch work")
+
+    monkeypatch.setattr(v3_cli, "run_project_workflow", unexpected)
+
+    result, code = v3_cli._rerun_failed(args)
+
+    assert code == 0
+    assert result == {
+        "schema_version": "3.0-failed-only-rerun",
+        "status": "SNAPSHOTS_READY",
+        "action": "NO_RERUN_REQUIRED",
+        "exit_code": 0,
+    }
+
+
+def test_public_failed_only_launches_exact_internal_generation_and_reconciles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    generation_output = output / ".igv-pipeline/rerun/executions/rerun-test"
+    runtime = tmp_path / "runtime-manifest.json"
+    runtime.write_text("{}\n", encoding="utf-8")
+    project = tmp_path / "project.yaml"
+    project.write_text('schema_version: "3.0"\n', encoding="utf-8")
+    receipt = output / "receipt.json"
+    receipt.write_text("{}\n", encoding="utf-8")
+    source = output / "source"
+    source.mkdir()
+    plan = {
+        "source_run": str(source),
+        "rerun_receipt": str(receipt),
+        "source_run_id": "run-1",
+        "generation_id": "rerun-test",
+        "generation_output": str(generation_output),
+        "default_work": str(output / ".work/rerun/rerun-test"),
+        "rerun_case_count": 3,
+    }
+    args = v3_cli._parser().parse_args(
+        [
+            "rerun-failed",
+            "--project",
+            str(project),
+            "--output",
+            str(output),
+            "--max-parallel",
+            "2",
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("IGV_RUNTIME_MANIFEST_INTERNAL", str(runtime))
+    monkeypatch.setattr(
+        v3_cli,
+        "failed_only_rerun_lock",
+        lambda _output: nullcontext(output),
+    )
+    monkeypatch.setattr(
+        v3_cli,
+        "build_failed_rerun_plan",
+        lambda *_args, **_kwargs: plan,
+    )
+    monkeypatch.setattr(v3_cli, "validate_live_project_binding", lambda *_args: None)
+
+    def launch(**kwargs: object) -> tuple[dict, int]:
+        captured.update(kwargs)
+        return {"status": "CASE_FAILURES", "exit_code": 2}, 2
+
+    monkeypatch.setattr(v3_cli, "run_project_workflow", launch)
+    monkeypatch.setattr(
+        v3_cli,
+        "reconcile_failed_rerun",
+        lambda *_args, **_kwargs: {
+            "status": "PUBLISHED",
+            "exit_code": 2,
+            "remaining_failed_case_count": 1,
+        },
+    )
+
+    result, code = v3_cli._rerun_failed(args)
+
+    assert code == 2
+    assert result["rerun_case_count"] == 3
+    assert captured["project"] is None
+    assert captured["batch_request"] is None
+    assert captured["rerun_source_run"] == str(source)
+    assert captured["rerun_receipt"] == str(receipt)
+    assert captured["run_id"] == "run-1"
+    assert captured["generation_id"] == "rerun-test"
+    assert captured["output"] == generation_output
+    assert captured["resume"] is False
+    assert captured["max_parallel"] == "2"
+    assert captured["persist_fatal_summary"] is False
 
 
 def test_cli_reports_invalid_project_types_as_structured_fatal(

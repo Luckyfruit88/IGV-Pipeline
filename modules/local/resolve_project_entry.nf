@@ -17,6 +17,8 @@ process RESOLVE_PROJECT_ENTRY {
     path runtime_manifest, stageAs: 'contract/runtime-manifest.json'
     val project_path
     val batch_request_path
+    val rerun_source_run
+    val rerun_receipt
     val requested_run_id
     val requested_generation_id
     val execution_mode
@@ -27,8 +29,12 @@ process RESOLVE_PROJECT_ENTRY {
     script:
     def projectB64 = project_path ? encodeProjectEntryValue(project_path) : ''
     def batchB64 = batch_request_path ? encodeProjectEntryValue(batch_request_path) : ''
+    def rerunSourceB64 = rerun_source_run ? encodeProjectEntryValue(rerun_source_run) : ''
+    def rerunReceiptB64 = rerun_receipt ? encodeProjectEntryValue(rerun_receipt) : ''
     def projectArg = project_path ? "--project-b64 '${projectB64}'" : ''
     def batchArg = batch_request_path ? "--batch-request-b64 '${batchB64}'" : ''
+    def rerunSourceArg = rerun_source_run ? "--rerun-source-run-b64 '${rerunSourceB64}'" : ''
+    def rerunReceiptArg = rerun_receipt ? "--rerun-receipt-b64 '${rerunReceiptB64}'" : ''
     def runArg = requested_run_id ? "--run-id '${requested_run_id}'" : ''
     def generationArg = requested_generation_id ? "--generation-id '${requested_generation_id}'" : ''
     """
@@ -39,6 +45,8 @@ process RESOLVE_PROJECT_ENTRY {
     '${params.python}' '${helper_script}' resolve \
         ${projectArg} \
         ${batchArg} \
+        ${rerunSourceArg} \
+        ${rerunReceiptArg} \
         --runtime-manifest runtime-manifest.input.json \
         --output-dir entry_source \
         ${runArg} \

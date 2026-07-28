@@ -12,10 +12,16 @@ workflow PROJECT_RUN {
     main:
     def explicitProject = params.project?.toString()?.trim() ?: ''
     def batchRequest = params.batch_request?.toString()?.trim() ?: ''
-    if (explicitProject && batchRequest) {
-        error('PROJECT_RUN accepts --project or --batch_request, never both')
+    def rerunSourceRun = params.rerun_source_run?.toString()?.trim() ?: ''
+    def rerunReceipt = params.rerun_receipt?.toString()?.trim() ?: ''
+    if ((rerunSourceRun && !rerunReceipt) || (!rerunSourceRun && rerunReceipt)) {
+        error('PROJECT_RUN rerun requires both --rerun_source_run and --rerun_receipt')
     }
-    def projectPath = batchRequest ? '' : (explicitProject ?: '/project/project.yaml')
+    def entryCount = [explicitProject, batchRequest, rerunSourceRun].count { value -> value }
+    if (entryCount > 1) {
+        error('PROJECT_RUN accepts project, batch_request, or rerun source, never more than one')
+    }
+    def projectPath = (batchRequest || rerunSourceRun) ? '' : (explicitProject ?: '/project/project.yaml')
     def outputRoot = params.output?.toString()?.trim() ?: '/output'
     def shardLimit = params.max_cases_per_shard as Integer
     if (!(1..256).contains(shardLimit)) {
@@ -63,14 +69,15 @@ workflow PROJECT_RUN {
         params.normalization_timeout,
     )
     executionPolicy = RESOLVE_EXECUTION_POLICY.out.policy
-    executionPolicyDoc = executionPolicy
-        .map { policyPath -> policyPath.text }
+    executionPolicyDoc = executionPolicy.map { policyPath -> policyPath.text }
 
     RESOLVE_PROJECT_ENTRY(
         entryHelper,
         runtimeManifest,
         projectPath,
         batchRequest,
+        rerunSourceRun,
+        rerunReceipt,
         params.run_id?.toString()?.trim() ?: '',
         params.generation_id?.toString()?.trim() ?: '',
         executionMode,
@@ -112,10 +119,9 @@ workflow PROJECT_RUN {
     def manifestSha = entryRecords.map { descriptor, _bundle ->
         descriptor.runtime_manifest_sha256.toString()
     }
-    runtimeFingerprint = entryRecords
-        .map { descriptor, _bundle ->
-            descriptor.runtime_fingerprint_sha256.toString()
-        }
+    runtimeFingerprint = entryRecords.map { descriptor, _bundle ->
+        descriptor.runtime_fingerprint_sha256.toString()
+    }
 
     VALIDATE_RUNTIME_IDENTITY(
         runtimeManifest,
@@ -140,15 +146,17 @@ workflow PROJECT_RUN {
         if (!(validation.status in ['PASS', 'STUB'])) {
             error('runtime manifest validation is neither PASS nor a Nextflow stub')
         }
-        groovy.json.JsonOutput.toJson([
-            schema_version: validation.schema_version,
-            status: validation.status,
-            runtime_manifest_sha256: validation.runtime_manifest_sha256,
-            runtime_fingerprint_sha256: validation.runtime_fingerprint_sha256,
-            materials_sha256: validation.materials_sha256,
-            runtime_config_sha256: validation.runtime_config_sha256,
-            observed_provenance: validation.observed_provenance,
-        ])
+        groovy.json.JsonOutput.toJson(
+            [
+                schema_version: validation.schema_version,
+                status: validation.status,
+                runtime_manifest_sha256: validation.runtime_manifest_sha256,
+                runtime_fingerprint_sha256: validation.runtime_fingerprint_sha256,
+                materials_sha256: validation.materials_sha256,
+                runtime_config_sha256: validation.runtime_config_sha256,
+                observed_provenance: validation.observed_provenance,
+            ]
+        )
     }
 
     directEntries = entryRecords

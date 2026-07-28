@@ -54,6 +54,10 @@ def build_project_run_command(
     max_parallel: str | int,
     max_cases_per_shard: int,
     runtime_manifest: str | Path,
+    rerun_source_run: str | Path | None = None,
+    rerun_receipt: str | Path | None = None,
+    run_id: str | None = None,
+    generation_id: str | None = None,
     igv_cpus: int = 1,
     igv_memory: str = "8GiB",
     igv_timeout: str = "30m",
@@ -63,8 +67,21 @@ def build_project_run_command(
     nextflow: str | None = None,
     profile: str = "standalone",
 ) -> tuple[list[str], Path, Path]:
-    if (project is None) == (batch_request is None):
-        raise ValueError("exactly one of project or batch_request is required")
+    if (rerun_source_run is None) != (rerun_receipt is None):
+        raise ValueError(
+            "rerun_source_run and rerun_receipt must be supplied together"
+        )
+    entry_count = sum(
+        (
+            project is not None,
+            batch_request is not None,
+            rerun_source_run is not None,
+        )
+    )
+    if entry_count != 1:
+        raise ValueError(
+            "exactly one of project, batch_request, or rerun source is required"
+        )
     if not 1 <= int(max_cases_per_shard) <= 256:
         raise ValueError("max-cases-per-shard must be between 1 and 256")
     if not isinstance(igv_cpus, int) or isinstance(igv_cpus, bool) or igv_cpus < 1:
@@ -76,14 +93,30 @@ def build_project_run_command(
     ):
         raise ValueError("normalization-cpus must be a positive integer")
 
-    source_flag: str
-    source_path: Path
-    if project is not None:
-        source_flag = "--project"
-        source_path = _regular_input(project, label="project.yaml")
+    source_args: list[str]
+    if rerun_source_run is not None and rerun_receipt is not None:
+        source_value = Path(rerun_source_run).expanduser()
+        if source_value.is_symlink() or not source_value.resolve(strict=True).is_dir():
+            raise ValueError("rerun source run must be a regular directory")
+        if not run_id or not generation_id:
+            raise ValueError("rerun launch requires run_id and generation_id")
+        source_args = [
+            "--rerun_source_run",
+            str(source_value.resolve(strict=True)),
+            "--rerun_receipt",
+            str(_regular_input(rerun_receipt, label="rerun receipt")),
+            "--run_id",
+            str(run_id),
+            "--generation_id",
+            str(generation_id),
+        ]
+    elif project is not None:
+        source_args = ["--project", str(_regular_input(project, label="project.yaml"))]
     else:
-        source_flag = "--batch_request"
-        source_path = _regular_input(batch_request, label="batch-request")
+        source_args = [
+            "--batch_request",
+            str(_regular_input(batch_request, label="batch-request")),
+        ]
 
     output_path = _output_directory(output)
     work_value = work if work is not None else output_path / ".work"
@@ -103,8 +136,7 @@ def build_project_run_command(
         profile,
         "-work-dir",
         str(work_path),
-        source_flag,
-        str(source_path),
+        *source_args,
         "--output",
         str(output_path),
         "--session_output",
@@ -334,6 +366,10 @@ def run_project_workflow(
     max_parallel: str | int,
     max_cases_per_shard: int,
     runtime_manifest: str | Path,
+    rerun_source_run: str | Path | None = None,
+    rerun_receipt: str | Path | None = None,
+    run_id: str | None = None,
+    generation_id: str | None = None,
     igv_cpus: int = 1,
     igv_memory: str = "8GiB",
     igv_timeout: str = "30m",
@@ -343,6 +379,7 @@ def run_project_workflow(
     nextflow: str | None = None,
     profile: str = "standalone",
     environment: Mapping[str, str] | None = None,
+    persist_fatal_summary: bool = True,
 ) -> tuple[dict[str, Any], int]:
     command, output_path, _work_path = build_project_run_command(
         project=project,
@@ -353,6 +390,10 @@ def run_project_workflow(
         max_parallel=max_parallel,
         max_cases_per_shard=max_cases_per_shard,
         runtime_manifest=runtime_manifest,
+        rerun_source_run=rerun_source_run,
+        rerun_receipt=rerun_receipt,
+        run_id=run_id,
+        generation_id=generation_id,
         igv_cpus=igv_cpus,
         igv_memory=igv_memory,
         igv_timeout=igv_timeout,
@@ -390,10 +431,11 @@ def run_project_workflow(
             "exit_code": 1,
             "nextflow_exit_code": completed.returncode,
         }
-        try:
-            atomic_write_json(output_path / "run_summary.json", summary)
-        except OSError:
-            pass
+        if persist_fatal_summary:
+            try:
+                atomic_write_json(output_path / "run_summary.json", summary)
+            except OSError:
+                pass
         return summary, 1
     try:
         result = validate_project_postflight(output_path)

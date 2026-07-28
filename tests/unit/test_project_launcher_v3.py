@@ -84,6 +84,41 @@ def test_native_command_requires_exactly_one_input_mode(
         )
 
 
+def test_failed_only_command_maps_internal_rerun_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _project, runtime = _inputs(tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    receipt = tmp_path / "rerun_receipt.json"
+    receipt.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(project_launcher, "_nextflow_executable", lambda _value: "nextflow")
+    monkeypatch.setattr(project_launcher, "_project_root", lambda: Path("/pipeline"))
+
+    command, output, work = project_launcher.build_project_run_command(
+        project=None,
+        batch_request=None,
+        rerun_source_run=source,
+        rerun_receipt=receipt,
+        run_id="run-1",
+        generation_id="rerun-" + "a" * 64,
+        output=tmp_path / "generation-output",
+        work=tmp_path / "generation-work",
+        resume=True,
+        max_parallel="auto",
+        max_cases_per_shard=256,
+        runtime_manifest=runtime,
+    )
+
+    assert command[command.index("--rerun_source_run") + 1] == str(source.resolve())
+    assert command[command.index("--rerun_receipt") + 1] == str(receipt.resolve())
+    assert command[command.index("--run_id") + 1] == "run-1"
+    assert command[command.index("--generation_id") + 1] == "rerun-" + "a" * 64
+    assert command[-1] == "-resume"
+    assert output == (tmp_path / "generation-output").resolve()
+    assert work == (tmp_path / "generation-work").resolve()
+
+
 def _completed_output(
     root: Path, *, eligible: bool, duplicate_final_trace: bool = False
 ) -> None:

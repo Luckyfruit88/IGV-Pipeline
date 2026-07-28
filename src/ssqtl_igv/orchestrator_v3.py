@@ -34,6 +34,7 @@ from .controller_runtime_v3 import (
     validate_controller_source_identity,
 )
 from .docker_worker_v3 import docker_worker_identity
+from .product_paths_v3 import cases_root
 from .review_package_v3 import build_review_package_v3
 from .rerun_v3 import freeze_case_failure_rerun, prepare_rerun_task_set
 from .runtime_identity import validate_runtime_manifest
@@ -236,7 +237,7 @@ def _validated_terminal_case_results(
     case_results: list[dict[str, Any]] = []
     for task in canonical_tasks:
         task_id = str(task["task_id"])
-        case_root = run_dir / "results" / "cases" / task_id
+        case_root = cases_root(run_dir) / task_id
         result_path = case_root / "case_result.json"
         bundle_path = case_root / "terminal_bundle.json"
         if result_path.is_symlink() or not result_path.is_file():
@@ -399,9 +400,9 @@ def _write_direct_output_tables(
     failure_fields = [
         "manifest_order",
         "task_id",
+        "chromosome",
         "failure_code",
         "message",
-        "chromosome",
         "input_fingerprint",
     ]
     snapshot_rows: list[dict[str, Any]] = []

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ssqtl_igv import project_admission_v3
 from ssqtl_igv.contracts import validate_v3_task_document
 from ssqtl_igv.rerun_v3 import freeze_case_failure_rerun, prepare_rerun_task_set
 from ssqtl_igv.utils import atomic_write_json, read_jsonl, sha256_file
@@ -136,3 +137,59 @@ def test_rerun_import_rejects_manifest_tamper(tmp_path: Path) -> None:
             run_id="run_001",
             generation_id="generation_002",
         )
+
+
+def test_project_entry_materializes_internal_failed_only_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, task = _source_run(tmp_path)
+    failed = {
+        key: task[key]
+        for key in (
+            "run_id",
+            "generation_id",
+            "task_id",
+            "manifest_order",
+            "input_fingerprint",
+        )
+    }
+    failed.update(eligible=False, failures=[{"code": "FAILED", "message": "fixture"}])
+    pointer = freeze_case_failure_rerun(source, [task], [failed])
+    assert pointer is not None
+    receipt = source / pointer["relative_path"] / "rerun_receipt.json"
+    runtime = tmp_path / "runtime-manifest.json"
+    runtime.write_text("{}\n", encoding="utf-8")
+    runtime_sha = sha256_file(runtime)
+    monkeypatch.setattr(
+        project_admission_v3,
+        "_runtime_claim",
+        lambda _path: (
+            runtime.resolve(),
+            {
+                "runtime_manifest_sha256": runtime_sha,
+                "runtime_fingerprint_sha256": "f" * 64,
+            },
+        ),
+    )
+
+    result = project_admission_v3.resolve_project_entry(
+        runtime_manifest=runtime,
+        rerun_source_run=source,
+        rerun_receipt=receipt,
+        output_dir=tmp_path / "entry",
+        run_id="run_001",
+        generation_id="generation_002",
+    )
+
+    entry = Path(result["output_dir"])
+    descriptor = json.loads((entry / "descriptor.json").read_text(encoding="utf-8"))
+    binding = json.loads((entry / "rerun_binding.json").read_text(encoding="utf-8"))
+    rerun_task = next(read_jsonl(entry / "normalization/tasks.jsonl"))
+    assert descriptor["entry_kind"] == "rerun"
+    assert descriptor["normalization_required"] is False
+    assert descriptor["generation_id"] == "generation_002"
+    assert binding["source_generation_id"] == "generation_001"
+    assert binding["target_generation_id"] == "generation_002"
+    assert binding["source_rerun_receipt_sha256"] == sha256_file(receipt)
+    assert rerun_task["task_id"] == task["task_id"]
+    assert rerun_task["generation_id"] == "generation_002"

@@ -176,6 +176,7 @@ The public CLI consists of:
 igv-snapshot init
 igv-snapshot doctor
 igv-snapshot run
+igv-snapshot rerun-failed
 igv-snapshot review
 igv-snapshot publish
 igv-snapshot import-v2
@@ -236,6 +237,41 @@ docker run --rm --platform linux/amd64 \
   --mount type=bind,src="$PWD/output",dst=/output \
   ghcr.io/luckyfruit88/igv-pipeline:3.0.0 run --resume
 ```
+
+To rerun only terminal failed cases, keep the same read-only project mount and
+the same writable output mount, then use the public failed-only controller:
+
+```bash
+docker run --rm --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  --network none \
+  --mount type=bind,src="$PWD/project",dst=/project,readonly \
+  --mount type=bind,src="$PWD/output",dst=/output \
+  ghcr.io/luckyfruit88/igv-pipeline:3.0.0 rerun-failed
+```
+
+`rerun-failed` discovers `failed_cases.tsv` and its checksum-bound terminal
+evidence automatically. It freezes the exact failed task set, executes only
+those tasks in a new immutable generation, validates that generation, and then
+atomically reconciles successful replacements into the existing
+`snapshots/chr*/<task_id>.png` product. Previously successful tasks are never
+rendered again. The user does not supply receipt, generation, or internal
+Nextflow rerun parameters.
+
+If that new generation is interrupted, repeat the same command with
+`rerun-failed --resume`; this resumes only that frozen failed-only generation.
+If some cases reach a new terminal failure, the command returns `2`, preserves
+their latest evidence, and a later plain `rerun-failed` creates the next new
+generation. It returns `0` when no failures remain (including an idempotent
+no-op), and `1` for an untrustworthy project/runtime/infrastructure failure.
+The mounted project must still match the source generation exactly. Same-name,
+same-checksum snapshots are idempotent; a different checksum is rejected
+instead of overwriting public output. Immutable generation evidence and
+controller state remain under `.igv-pipeline/rerun/`.
+
+The native `--rerun_source_run` and `--rerun_receipt` Nextflow parameters are
+internal implementation contracts. Ordinary users should use
+`igv-snapshot rerun-failed` (or the container entrypoint form above).
 
 The embedded runtime manifest is validated automatically, and its fingerprint
 is a real Nextflow input. Small control files use content hashes; large
@@ -558,6 +594,7 @@ case 生成了 terminal failure bundle，命令仍可能返回 `0`；此时
 igv-snapshot init
 igv-snapshot doctor
 igv-snapshot run
+igv-snapshot rerun-failed
 igv-snapshot review
 igv-snapshot publish
 igv-snapshot import-v2
@@ -614,6 +651,35 @@ docker run --rm --platform linux/amd64 \
   --mount type=bind,src="$PWD/output",dst=/output \
   ghcr.io/luckyfruit88/igv-pipeline:3.0.0 run --resume
 ```
+
+若只重跑已经终态失败的 case，保持同一个只读 project mount 和同一个可写 output
+mount，使用公开的 failed-only 控制器：
+
+```bash
+docker run --rm --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  --network none \
+  --mount type=bind,src="$PWD/project",dst=/project,readonly \
+  --mount type=bind,src="$PWD/output",dst=/output \
+  ghcr.io/luckyfruit88/igv-pipeline:3.0.0 rerun-failed
+```
+
+`rerun-failed` 会自动发现 `failed_cases.tsv` 及其 checksum-bound terminal
+evidence，冻结精确失败 task 集合，只在一个新的 immutable generation 中执行这些
+task；新 generation 通过验证后，成功结果才会原子合并回现有
+`snapshots/chr*/<task_id>.png`。此前成功的 task 不会再次渲染。普通用户不需要提供
+receipt、generation ID 或内部 Nextflow rerun 参数。
+
+若这个新 generation 被中断，使用 `rerun-failed --resume`；它只恢复该次已冻结的
+failed-only generation。若仍有 case 形成新的终态失败，命令返回 `2` 并保留最新
+证据；以后再次运行不带 `--resume` 的 `rerun-failed` 会创建下一个新 generation。
+失败全部消失或本来就没有失败时返回 `0`（幂等 no-op），project/runtime/基础设施
+无法形成可信结果时返回 `1`。挂载的 project 必须与失败来源 generation 完全一致。
+同名同 checksum 视为幂等；同名但 checksum 不同会拒绝覆盖。各 generation 的
+immutable 证据与控制状态保存在 `.igv-pipeline/rerun/`。
+
+原生 Nextflow 参数 `--rerun_source_run` 和 `--rerun_receipt` 是内部实现契约。普通
+用户应使用 `igv-snapshot rerun-failed`（或上面的容器 entrypoint 写法）。
 
 镜像内置的 runtime manifest 会自动验证，其 fingerprint 是真实 Nextflow input。
 小型控制文件按内容哈希；大型科学输入在 resume 检查中采用 Nextflow 标准的

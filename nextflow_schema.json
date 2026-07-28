@@ -10,12 +10,22 @@
     "project": {
       "type": ["string", "null"],
       "format": "file-path",
-      "description": "Schema 3.0 project.yaml. Mutually exclusive with batch_request; defaults to /project/project.yaml when neither is provided."
+      "description": "Schema 3.0 project.yaml. Mutually exclusive with batch_request and the internal rerun source; defaults to /project/project.yaml when no other entry is provided."
     },
     "batch_request": {
       "type": ["string", "null"],
       "format": "file-path",
       "description": "Immutable campaign batch-request.json. Mutually exclusive with project."
+    },
+    "rerun_source_run": {
+      "type": ["string", "null"],
+      "format": "directory-path",
+      "description": "Internal checksum-bound failed-only source generation. The public launcher discovers this automatically."
+    },
+    "rerun_receipt": {
+      "type": ["string", "null"],
+      "format": "file-path",
+      "description": "Internal failed-only rerun receipt paired with rerun_source_run."
     },
     "output": {
       "type": "string",

@@ -20,8 +20,14 @@ from .orchestrator_v3 import (
     run_portable_ssqtl_normalization,
 )
 from .probes_v3 import collect_doctor_report
-from .project_launcher import run_project_workflow
+from .project_launcher import run_project_workflow, validate_project_postflight
 from .project_v3 import load_project_config
+from .public_rerun_v3 import (
+    build_failed_rerun_plan,
+    failed_only_rerun_lock,
+    reconcile_failed_rerun,
+    validate_live_project_binding,
+)
 from .publication import build_publication_promotion_receipt, promote_publication
 from .publication_v3 import build_publication_staging
 from .review_server import finalize_review, serve_review
@@ -66,6 +72,18 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--max-parallel", default="auto", metavar="auto|N")
     run.add_argument("--max-cases-per-shard", type=int, default=256)
     _add_resource_options(run)
+
+    rerun_failed = subparsers.add_parser(
+        "rerun-failed",
+        help="run only checksum-bound failed cases in a new generation",
+    )
+    rerun_failed.add_argument("--project", default="/project/project.yaml")
+    rerun_failed.add_argument("--output", default="/output")
+    rerun_failed.add_argument("--work")
+    rerun_failed.add_argument("--resume", action="store_true")
+    rerun_failed.add_argument("--max-parallel", default="auto", metavar="auto|N")
+    rerun_failed.add_argument("--max-cases-per-shard", type=int, default=256)
+    _add_resource_options(rerun_failed)
 
     review = subparsers.add_parser(
         "review", help="optionally serve the localhost review UI or finalize decisions"
@@ -239,6 +257,109 @@ def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     )
 
 
+def _rerun_failed(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    output = reject_symlink_path_components(
+        args.output, label="output directory"
+    ).resolve(strict=True)
+    runtime_manifest = _embedded_runtime_manifest()
+    with failed_only_rerun_lock(output):
+        plan = build_failed_rerun_plan(
+            output,
+            runtime_manifest=runtime_manifest,
+        )
+        if plan is None:
+            return (
+                {
+                    "schema_version": "3.0-failed-only-rerun",
+                    "status": "SNAPSHOTS_READY",
+                    "action": "NO_RERUN_REQUIRED",
+                    "exit_code": 0,
+                },
+                0,
+            )
+
+        validate_live_project_binding(plan["source_run"], args.project)
+        generation_output = Path(plan["generation_output"])
+        complete = all(
+            path.is_file() and not path.is_symlink()
+            for path in (
+                generation_output / "snapshots.tsv",
+                generation_output / "failed_cases.tsv",
+                generation_output / "run_summary.json",
+                generation_output / "reports" / "trace.txt",
+                generation_output
+                / ".igv-pipeline"
+                / "contract"
+                / "run_identity.json",
+            )
+        )
+        if complete:
+            generation_result = validate_project_postflight(generation_output)
+            generation_code = int(generation_result["exit_code"])
+        else:
+            if (
+                generation_output.exists()
+                and any(generation_output.iterdir())
+                and not args.resume
+            ):
+                raise ValueError(
+                    "the failed-only generation is incomplete; rerun with --resume"
+                )
+            generation_result, generation_code = run_project_workflow(
+                project=None,
+                batch_request=None,
+                rerun_source_run=plan["source_run"],
+                rerun_receipt=plan["rerun_receipt"],
+                run_id=plan["source_run_id"],
+                generation_id=plan["generation_id"],
+                output=generation_output,
+                work=args.work or plan["default_work"],
+                resume=args.resume,
+                max_parallel=args.max_parallel,
+                max_cases_per_shard=args.max_cases_per_shard,
+                runtime_manifest=runtime_manifest,
+                igv_cpus=args.igv_cpus,
+                igv_memory=args.igv_memory,
+                igv_timeout=args.igv_timeout,
+                normalization_cpus=args.normalization_cpus,
+                normalization_memory=args.normalization_memory,
+                normalization_timeout=args.normalization_timeout,
+                persist_fatal_summary=False,
+            )
+        if generation_code == 1:
+            return (
+                {
+                    "schema_version": "3.0-failed-only-rerun",
+                    "status": "INFRASTRUCTURE_FATAL",
+                    "exit_code": 1,
+                    "generation_id": plan["generation_id"],
+                    "generation": generation_result,
+                },
+                1,
+            )
+        reconciliation = reconcile_failed_rerun(
+            output,
+            source_run=plan["source_run"],
+            rerun_receipt=plan["rerun_receipt"],
+            incoming_output=generation_output,
+        )
+        code = int(reconciliation["exit_code"])
+        return (
+            {
+                "schema_version": "3.0-failed-only-rerun",
+                "status": (
+                    "CASE_FAILURES" if code == 2 else "SNAPSHOTS_READY"
+                ),
+                "exit_code": code,
+                "generation_id": plan["generation_id"],
+                "rerun_case_count": plan["rerun_case_count"],
+                "generation": generation_result,
+                "reconciliation": reconciliation,
+            },
+            code,
+        )
+
+
 def _prepare_campaign_master(args: argparse.Namespace) -> dict[str, Any]:
     project = load_project_config(args.project)
     if project["adapter"] != "ssqtl":
@@ -390,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
             code = 0 if result["status"] == "PASS" else 1
         elif args.command == "run":
             result, code = _run(args)
+        elif args.command == "rerun-failed":
+            result, code = _rerun_failed(args)
         elif args.command == "review":
             if args.finalize:
                 result = finalize_review(args.output)

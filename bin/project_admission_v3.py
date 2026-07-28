@@ -28,6 +28,8 @@ def _parser() -> argparse.ArgumentParser:
     resolve = commands.add_parser("resolve")
     resolve.add_argument("--project-b64")
     resolve.add_argument("--batch-request-b64")
+    resolve.add_argument("--rerun-source-run-b64")
+    resolve.add_argument("--rerun-receipt-b64")
     resolve.add_argument("--runtime-manifest", required=True)
     resolve.add_argument("--output-dir", required=True)
     resolve.add_argument("--run-id")
@@ -62,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime_manifest=args.runtime_manifest,
             project=_decoded(args.project_b64),
             batch_request=_decoded(args.batch_request_b64),
+            rerun_source_run=_decoded(args.rerun_source_run_b64),
+            rerun_receipt=_decoded(args.rerun_receipt_b64),
             run_id=args.run_id,
             generation_id=args.generation_id,
             profile=args.profile,

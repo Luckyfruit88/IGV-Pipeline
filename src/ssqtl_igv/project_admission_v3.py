@@ -21,7 +21,9 @@ from .orchestrator_v3 import (
     _write_direct_output_tables,
     _write_run_summary,
 )
+from .product_paths_v3 import contract_root
 from .project_v3 import build_project_source_binding, load_project_config
+from .rerun_v3 import freeze_case_failure_rerun, prepare_rerun_task_set
 from .runtime_identity import validate_runtime_manifest
 from .sharding_v3 import create_bounded_shards
 from .utils import (
@@ -50,6 +52,14 @@ _FAILURE_FIELDS = (
     "chromosome",
     "failure_code",
     "message",
+    "input_fingerprint",
+)
+_LEGACY_FAILURE_FIELDS = (
+    "manifest_order",
+    "task_id",
+    "failure_code",
+    "message",
+    "chromosome",
     "input_fingerprint",
 )
 _SAFE_SNAPSHOT_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,250}$")
@@ -142,6 +152,8 @@ def resolve_project_entry(
     runtime_manifest: str | Path,
     project: str | Path | None = None,
     batch_request: str | Path | None = None,
+    rerun_source_run: str | Path | None = None,
+    rerun_receipt: str | Path | None = None,
     run_id: str | None = None,
     generation_id: str | None = None,
     profile: str = "standalone",
@@ -154,14 +166,129 @@ def resolve_project_entry(
     canonical normalization bundle.
     """
 
-    if (project is None) == (batch_request is None):
-        raise ValueError("exactly one of project or batch_request must be supplied")
+    if (rerun_source_run is None) != (rerun_receipt is None):
+        raise ValueError(
+            "rerun_source_run and rerun_receipt must be supplied together"
+        )
+    entry_count = sum(
+        (
+            project is not None,
+            batch_request is not None,
+            rerun_source_run is not None,
+        )
+    )
+    if entry_count != 1:
+        raise ValueError(
+            "exactly one of project, batch_request, or rerun source must be supplied"
+        )
     runtime_source, runtime_claim = _runtime_claim(runtime_manifest)
     destination, staging = _safe_output_directory(
         output_dir, label="project entry source"
     )
     try:
-        if batch_request is not None:
+        if rerun_source_run is not None and rerun_receipt is not None:
+            source_value = Path(rerun_source_run).expanduser()
+            if source_value.is_symlink() or not source_value.resolve(
+                strict=True
+            ).is_dir():
+                raise ValueError("rerun source run must be a regular directory")
+            source_run = source_value.resolve(strict=True)
+            source_contract = contract_root(source_run)
+            source_identity = _object(
+                source_contract / "run_identity.json", label="rerun source identity"
+            )
+            effective_run_id = str(source_identity["run_id"])
+            if run_id is not None and run_id != effective_run_id:
+                raise ValueError("run_id differs from the immutable rerun source")
+            if generation_id is None:
+                raise ValueError("rerun entry requires an explicit generation_id")
+            effective_generation_id = generation_id
+            normalization = staging / "normalization"
+            imported = prepare_rerun_task_set(
+                source_run,
+                rerun_receipt,
+                normalization,
+                run_id=effective_run_id,
+                generation_id=effective_generation_id,
+            )
+            tasks = list(read_jsonl(normalization / "tasks.jsonl"))
+            validation = {
+                "schema_version": "3.0",
+                "pipeline_version": "3.0.0",
+                "status": (
+                    "PASS_WITH_CASE_INPUT_ERRORS"
+                    if any(
+                        task["core"]["preflight"]["state"] != "READY"
+                        for task in tasks
+                    )
+                    else "PASS"
+                ),
+                "adapter_id": imported["adapter_id"],
+                "run_id": effective_run_id,
+                "generation_id": effective_generation_id,
+                "task_count": len(tasks),
+                "tasks_sha256": sha256_file(normalization / "tasks.jsonl"),
+                "task_set_sha256": task_set_fingerprint(tasks),
+                "source": "checksum_bound_failed_only_rerun",
+            }
+            atomic_write_json(normalization / "validation.json", validation)
+            atomic_write_json(
+                normalization / "parameters.json",
+                {
+                    "schema_version": "3.0",
+                    "adapter_id": imported["adapter_id"],
+                    "run_id": effective_run_id,
+                    "generation_id": effective_generation_id,
+                    "source_rerun_id": imported["source_rerun_id"],
+                    "same_generation_resume_allowed": False,
+                },
+            )
+            rerun_binding = {
+                "schema_version": "3.0-rerun-binding",
+                "source_run_id": imported["run_id"],
+                "source_generation_id": imported["source_generation_id"],
+                "source_canonical_tasks_sha256": imported[
+                    "source_canonical_tasks_sha256"
+                ],
+                "source_rerun_id": imported["source_rerun_id"],
+                "source_rerun_receipt_sha256": imported[
+                    "source_rerun_receipt_sha256"
+                ],
+                "source_rerun_manifest_sha256": imported[
+                    "source_rerun_manifest_sha256"
+                ],
+                "target_run_id": effective_run_id,
+                "target_generation_id": effective_generation_id,
+                "target_tasks_sha256": validation["tasks_sha256"],
+                "target_task_set_sha256": validation["task_set_sha256"],
+                "same_generation_resume_allowed": False,
+            }
+            atomic_write_json(staging / "rerun_binding.json", rerun_binding)
+            for name in ("project_binding.json", "ssqtl_bind_contract.json"):
+                source = source_contract / name
+                if source.is_file() and not source.is_symlink():
+                    shutil.copyfile(source, staging / name)
+            descriptor = {
+                "schema_version": "3.0-project-entry-source",
+                "entry_kind": "rerun",
+                "adapter": imported["adapter_id"],
+                "normalization_required": False,
+                "run_id": effective_run_id,
+                "generation_id": effective_generation_id,
+                "profile": profile,
+                "source_run": str(source_run),
+                "source_generation_id": imported["source_generation_id"],
+                "source_rerun_id": imported["source_rerun_id"],
+                "rerun_binding_sha256": sha256_file(
+                    staging / "rerun_binding.json"
+                ),
+                **runtime_claim,
+            }
+            if (staging / "project_binding.json").is_file():
+                descriptor["project_binding_sha256"] = sha256_file(
+                    staging / "project_binding.json"
+                )
+        elif batch_request is not None:
             tasks, binding_value = materialize_batch_tasks(batch_request)
             binding = dict(binding_value)
             request = dict(binding["request"])
@@ -210,6 +337,7 @@ def resolve_project_entry(
                 **runtime_claim,
             }
         else:
+            assert project is not None
             loaded = load_project_config(project)
             project_binding = build_project_source_binding(loaded)
             atomic_write_json(staging / "project_binding.json", project_binding)
@@ -390,6 +518,7 @@ def admit_project_tasks(
             "campaign_binding.json",
             "batch-request.json",
             "ssqtl_bind_contract.json",
+            "rerun_binding.json",
         ):
             source = entry / name
             if source.is_file() and not source.is_symlink():
@@ -443,6 +572,7 @@ def admit_project_tasks(
             ("campaign_binding.json", "campaign_binding_sha256"),
             ("batch-request.json", "batch_request_sha256"),
             ("ssqtl_bind_contract.json", "ssqtl_bind_contract_sha256"),
+            ("rerun_binding.json", "rerun_binding_sha256"),
         ):
             path = contract / name
             if path.is_file():
@@ -562,6 +692,11 @@ def finalize_cases(
         shutil.rmtree(staging / "results")
         shutil.rmtree(staging / "contract")
         shutil.rmtree(staging / "shards")
+        rerun = (
+            freeze_case_failure_rerun(staging, tasks, case_results)
+            if failures
+            else None
+        )
         summary = {
             "schema_version": "3.0",
             "pipeline_version": "3.0.0",
@@ -584,6 +719,7 @@ def finalize_cases(
                 provenance / "contract" / "execution_policy.json",
                 label="execution policy",
             )["concurrency"]["effective_max_parallel"],
+            "rerun": rerun,
         }
         _write_run_summary(staging, summary)
         os.replace(staging, destination)
@@ -605,7 +741,13 @@ def _read_product_tsv(
         raise ValueError(f"snapshot product lacks regular {name}: {root}")
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        if tuple(reader.fieldnames or ()) != expected_fields:
+        observed_fields = tuple(reader.fieldnames or ())
+        compatible_legacy_failure_table = (
+            name == "failed_cases.tsv"
+            and expected_fields == _FAILURE_FIELDS
+            and observed_fields == _LEGACY_FAILURE_FIELDS
+        )
+        if observed_fields != expected_fields and not compatible_legacy_failure_table:
             raise ValueError(f"snapshot product {name} field contract differs")
         return [{key: str(value or "") for key, value in row.items()} for row in reader]
 

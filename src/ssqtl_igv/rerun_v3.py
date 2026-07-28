@@ -12,6 +12,7 @@ from typing import Any
 from .publication import verify_checksum_tree
 from .contracts import validate_unique_task_set, validate_v3_task_document, v3_task_fingerprint
 from .identity import task_set_fingerprint
+from .product_paths_v3 import contract_root
 from .utils import (
     atomic_write_json,
     atomic_write_text,
@@ -93,13 +94,22 @@ def freeze_case_failure_rerun(
         )
     if not rows:
         return None
-    identity = _object(run_root / "contract" / "run_identity.json", label="run identity")
-    tasks_path = run_root / "contract" / "tasks.jsonl"
+    immutable_contract = contract_root(run_root)
+    identity = _object(immutable_contract / "run_identity.json", label="run identity")
+    tasks_path = immutable_contract / "tasks.jsonl"
     if identity.get("canonical_tasks_sha256") != sha256_file(tasks_path):
         raise ValueError("run identity no longer binds the rerun source task set")
     request_set_sha256 = sha256_json(rows)
     rerun_id = "case_failures_" + request_set_sha256
-    destination = run_root / "rerun" / "generations" / rerun_id
+    # Pull-and-run products keep control evidence below ``.igv-pipeline``;
+    # legacy controller runs keep it at the run root.  The receipt contract is
+    # identical in both layouts and remains hidden for the public product.
+    rerun_root = (
+        run_root / "rerun"
+        if immutable_contract == run_root / "contract"
+        else run_root / ".igv-pipeline" / "rerun"
+    )
+    destination = rerun_root / "generations" / rerun_id
     receipt = {
         "schema_version": "3.0-rerun-receipt",
         "rerun_id": rerun_id,
@@ -214,8 +224,11 @@ def prepare_rerun_task_set(
     if not requests:
         raise ValueError("rerun request set is empty")
 
-    identity = _object(source / "contract" / "run_identity.json", label="source run identity")
-    tasks_path = source / "contract" / "tasks.jsonl"
+    immutable_contract = contract_root(source)
+    identity = _object(
+        immutable_contract / "run_identity.json", label="source run identity"
+    )
+    tasks_path = immutable_contract / "tasks.jsonl"
     if tasks_path.is_symlink() or not tasks_path.is_file():
         raise ValueError("source canonical tasks are unavailable")
     if (
