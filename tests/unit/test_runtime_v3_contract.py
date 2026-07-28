@@ -77,7 +77,7 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert 'exec "${nextflow_launcher}" "$@"' in nextflow_wrapper
     assert 'ENTRYPOINT ["runtime-entrypoint"]' in dockerfile
     assert 'CMD ["--help"]' in dockerfile
-    assert 'doctor|run|review|publish|campaign)' in entrypoint
+    assert 'doctor|run|rerun-failed|review|publish|campaign)' in entrypoint
     assert 'init|import-v2)' in entrypoint
     assert '--help|-h|--version)' in entrypoint
     assert 'exec "${cli}" "$@"' in entrypoint
@@ -87,6 +87,7 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert '[[ "$1" == "/bin/bash" ]]' in entrypoint
     assert '[[ "$(id -u)" != 0 ]]' in entrypoint
     assert '[[ "$1" == "run" ||' in entrypoint
+    assert '"$1" == "rerun-failed"' in entrypoint
     assert '"${2:-}" == "prepare-master"' in entrypoint
     assert '"${2:-}" == "run-batch"' in entrypoint
     assert "/usr/local/bin/runtime-self-test >/dev/null" in entrypoint
@@ -139,6 +140,7 @@ def test_runtime_entrypoint_self_tests_only_execution_capable_commands() -> None
         entrypoint.index('if [[ "$1" == "run"')
         : entrypoint.rindex("/usr/local/bin/runtime-self-test >/dev/null")
     ]
+    assert '"$1" == "rerun-failed"' in condition
     assert '"${2:-}" == "prepare-master"' in condition
     assert '"${2:-}" == "run-batch"' in condition
     for control_only in ("prepare", "status", "next"):
