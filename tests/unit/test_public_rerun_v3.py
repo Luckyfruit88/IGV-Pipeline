@@ -7,7 +7,10 @@ import pytest
 
 from ssqtl_igv.contracts import V3_GENERIC_MANUAL_ASSERTIONS
 from ssqtl_igv.identity import task_set_fingerprint
-from ssqtl_igv.public_rerun_v3 import reconcile_failed_rerun
+from ssqtl_igv.public_rerun_v3 import (
+    reconcile_failed_rerun,
+    validate_live_project_binding,
+)
 from ssqtl_igv.rerun_v3 import freeze_case_failure_rerun
 from ssqtl_igv.utils import read_jsonl, sha256_file, sha256_json, write_jsonl
 
@@ -167,6 +170,93 @@ def _source_product(root: Path) -> tuple[dict, Path]:
     assert pointer is not None
     receipt = root / pointer["relative_path"] / "rerun_receipt.json"
     return task, receipt
+
+
+def _add_campaign_source_contract(root: Path, task: dict) -> None:
+    contract = root / ".igv-pipeline" / "contract"
+    tasks_path = contract / "tasks.jsonl"
+    tasks = list(read_jsonl(tasks_path))
+    tasks_sha = sha256_file(tasks_path)
+    tasks_set_sha = task_set_fingerprint(tasks)
+    request = {
+        "schema_version": "3.0-batch-request",
+        "campaign_id": task["run_id"],
+        "batch_id": task["generation_id"],
+        "purpose": "PILOT_QA",
+        "execution_run_id": task["run_id"],
+        "execution_generation_id": task["generation_id"],
+        "task_count": 1,
+        "tasks_sha256": tasks_sha,
+        "task_set_sha256": tasks_set_sha,
+        "source_tasks": [
+            {
+                "task_id": task["task_id"],
+                "batch_manifest_order": 1,
+                "batch_input_fingerprint": task["input_fingerprint"],
+            }
+        ],
+    }
+    request["request_sha256"] = sha256_json(request)
+    request_path = contract / "batch-request.json"
+    request_path.write_text(json.dumps(request) + "\n", encoding="utf-8")
+    binding = {
+        "schema_version": "3.0-batch-admission",
+        "campaign_id": request["campaign_id"],
+        "batch_id": request["batch_id"],
+        "purpose": request["purpose"],
+        "batch_request_sha256": sha256_file(request_path),
+        "task_count": 1,
+        "tasks_sha256": tasks_sha,
+        "task_set_sha256": tasks_set_sha,
+    }
+    binding_path = contract / "campaign_binding.json"
+    binding_path.write_text(json.dumps(binding) + "\n", encoding="utf-8")
+    identity = json.loads(
+        (contract / "run_identity.json").read_text(encoding="utf-8")
+    )
+    identity.update(
+        adapter="ssqtl",
+        canonical_task_set_sha256=tasks_set_sha,
+        batch_request_sha256=sha256_file(request_path),
+        campaign_binding_sha256=sha256_file(binding_path),
+    )
+    (contract / "run_identity.json").write_text(
+        json.dumps(identity) + "\n", encoding="utf-8"
+    )
+
+
+def test_campaign_source_authorizes_without_live_project_binding(tmp_path: Path) -> None:
+    product = tmp_path / "output"
+    task, _receipt = _source_product(product)
+    _add_campaign_source_contract(product, task)
+
+    validate_live_project_binding(product, tmp_path / "not-used.yaml")
+
+
+def test_campaign_source_rejects_task_mapping_tamper(tmp_path: Path) -> None:
+    product = tmp_path / "output"
+    task, _receipt = _source_product(product)
+    _add_campaign_source_contract(product, task)
+    request_path = product / ".igv-pipeline" / "contract" / "batch-request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["source_tasks"][0]["task_id"] = "case_other"
+    request["request_sha256"] = sha256_json(
+        {key: value for key, value in request.items() if key != "request_sha256"}
+    )
+    request_path.write_text(json.dumps(request) + "\n", encoding="utf-8")
+    identity_path = product / ".igv-pipeline" / "contract" / "run_identity.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity["batch_request_sha256"] = sha256_file(request_path)
+    identity_path.write_text(json.dumps(identity) + "\n", encoding="utf-8")
+    binding_path = product / ".igv-pipeline" / "contract" / "campaign_binding.json"
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    binding["batch_request_sha256"] = sha256_file(request_path)
+    binding_path.write_text(json.dumps(binding) + "\n", encoding="utf-8")
+    identity["campaign_binding_sha256"] = sha256_file(binding_path)
+    identity_path.write_text(json.dumps(identity) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source task task_id differs"):
+        validate_live_project_binding(product, tmp_path / "not-used.yaml")
 
 
 def _incoming_product(

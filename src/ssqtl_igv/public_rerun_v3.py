@@ -143,16 +143,97 @@ def current_failed_source(
 
 
 def validate_live_project_binding(source_run: str | Path, project: str | Path) -> None:
-    """Require the mounted project to match the source generation exactly."""
+    """Authorize rerun input from a direct project or an immutable batch source."""
 
     source = _product_root(source_run)
-    frozen_path = contract_root(source) / "project_binding.json"
-    frozen = _object(frozen_path, label="source project binding")
-    live = build_project_source_binding(load_project_config(project))
-    if live != frozen:
+    contract = contract_root(source)
+    frozen_path = contract / "project_binding.json"
+    if frozen_path.exists() or frozen_path.is_symlink():
+        frozen = _object(frozen_path, label="source project binding")
+        live = build_project_source_binding(load_project_config(project))
+        if live != frozen:
+            raise ValueError(
+                "project metadata or input fingerprints differ from the failed generation"
+            )
+        return
+
+    request_path = contract / "batch-request.json"
+    binding_path = contract / "campaign_binding.json"
+    if not request_path.exists() and not binding_path.exists():
         raise ValueError(
-            "project metadata or input fingerprints differ from the failed generation"
+            "rerun source lacks project_binding.json or immutable campaign binding"
         )
+    request = _object(request_path, label="source batch request")
+    binding = _object(binding_path, label="source campaign binding")
+    identity = _object(contract / "run_identity.json", label="rerun source identity")
+    tasks_path = contract / "tasks.jsonl"
+    if tasks_path.is_symlink() or not tasks_path.is_file():
+        raise ValueError("campaign rerun source tasks must be a regular file")
+    tasks = list(read_jsonl(tasks_path))
+
+    if request.get("schema_version") != "3.0-batch-request":
+        raise ValueError("campaign rerun batch request schema differs")
+    if binding.get("schema_version") != "3.0-batch-admission":
+        raise ValueError("campaign rerun binding schema differs")
+    if identity.get("adapter") != "ssqtl":
+        raise ValueError("campaign rerun source adapter must be ssqtl")
+
+    request_sha = sha256_file(request_path)
+    binding_sha = sha256_file(binding_path)
+    tasks_sha = sha256_file(tasks_path)
+    tasks_set_sha = task_set_fingerprint(tasks)
+    if identity.get("batch_request_sha256") != request_sha:
+        raise ValueError("campaign rerun batch request differs from run identity")
+    if identity.get("campaign_binding_sha256") != binding_sha:
+        raise ValueError("campaign rerun binding differs from run identity")
+    if identity.get("canonical_tasks_sha256") != tasks_sha:
+        raise ValueError("campaign rerun tasks differ from run identity")
+    if identity.get("canonical_task_set_sha256") != tasks_set_sha:
+        raise ValueError("campaign rerun task set differs from run identity")
+
+    request_without_self_hash = {
+        key: value for key, value in request.items() if key != "request_sha256"
+    }
+    if request.get("request_sha256") != sha256_json(request_without_self_hash):
+        raise ValueError("campaign rerun batch request self-hash differs")
+    expected_request = {
+        "execution_run_id": identity.get("run_id"),
+        "execution_generation_id": identity.get("generation_id"),
+        "task_count": len(tasks),
+        "tasks_sha256": tasks_sha,
+        "task_set_sha256": tasks_set_sha,
+    }
+    for key, expected in expected_request.items():
+        if request.get(key) != expected:
+            raise ValueError(f"campaign rerun batch request {key} differs")
+
+    expected_binding = {
+        "batch_request_sha256": request_sha,
+        "batch_id": request.get("batch_id"),
+        "campaign_id": request.get("campaign_id"),
+        "purpose": request.get("purpose"),
+        "task_count": len(tasks),
+        "tasks_sha256": tasks_sha,
+        "task_set_sha256": tasks_set_sha,
+    }
+    for key, expected in expected_binding.items():
+        if binding.get(key) != expected:
+            raise ValueError(f"campaign rerun binding {key} differs")
+
+    source_tasks = request.get("source_tasks")
+    if not isinstance(source_tasks, list) or len(source_tasks) != len(tasks):
+        raise ValueError("campaign rerun source task mapping differs")
+    for index, (source_task, task) in enumerate(zip(source_tasks, tasks), 1):
+        if not isinstance(source_task, Mapping):
+            raise ValueError("campaign rerun source task mapping is invalid")
+        expected_source = {
+            "task_id": task.get("task_id"),
+            "batch_manifest_order": index,
+            "batch_input_fingerprint": task.get("input_fingerprint"),
+        }
+        for key, expected in expected_source.items():
+            if source_task.get(key) != expected:
+                raise ValueError(f"campaign rerun source task {key} differs")
 
 
 def build_failed_rerun_plan(

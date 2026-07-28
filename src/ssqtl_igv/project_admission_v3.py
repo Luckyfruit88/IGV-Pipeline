@@ -264,7 +264,12 @@ def resolve_project_entry(
                 "same_generation_resume_allowed": False,
             }
             atomic_write_json(staging / "rerun_binding.json", rerun_binding)
-            for name in ("project_binding.json", "ssqtl_bind_contract.json"):
+            for name in (
+                "project_binding.json",
+                "ssqtl_bind_contract.json",
+                "campaign_binding.json",
+                "batch-request.json",
+            ):
                 source = source_contract / name
                 if source.is_file() and not source.is_symlink():
                     shutil.copyfile(source, staging / name)
@@ -287,6 +292,14 @@ def resolve_project_entry(
             if (staging / "project_binding.json").is_file():
                 descriptor["project_binding_sha256"] = sha256_file(
                     staging / "project_binding.json"
+                )
+            if (staging / "campaign_binding.json").is_file():
+                descriptor["campaign_binding_sha256"] = sha256_file(
+                    staging / "campaign_binding.json"
+                )
+            if (staging / "batch-request.json").is_file():
+                descriptor["batch_request_sha256"] = sha256_file(
+                    staging / "batch-request.json"
                 )
         elif batch_request is not None:
             tasks, binding_value = materialize_batch_tasks(batch_request)

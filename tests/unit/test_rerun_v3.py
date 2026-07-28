@@ -193,3 +193,66 @@ def test_project_entry_materializes_internal_failed_only_generation(
     assert binding["source_rerun_receipt_sha256"] == sha256_file(receipt)
     assert rerun_task["task_id"] == task["task_id"]
     assert rerun_task["generation_id"] == "generation_002"
+
+
+def test_project_entry_carries_campaign_source_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, task = _source_run(tmp_path)
+    source_contract = source / "contract"
+    campaign_binding = {"schema_version": "3.0-batch-admission", "task_count": 1}
+    batch_request = {"schema_version": "3.0-batch-request", "task_count": 1}
+    atomic_write_json(source_contract / "campaign_binding.json", campaign_binding)
+    atomic_write_json(source_contract / "batch-request.json", batch_request)
+    failed = {
+        key: task[key]
+        for key in (
+            "run_id",
+            "generation_id",
+            "task_id",
+            "manifest_order",
+            "input_fingerprint",
+        )
+    }
+    failed.update(eligible=False, failures=[{"code": "FAILED", "message": "fixture"}])
+    pointer = freeze_case_failure_rerun(source, [task], [failed])
+    assert pointer is not None
+    receipt = source / pointer["relative_path"] / "rerun_receipt.json"
+    runtime = tmp_path / "runtime-manifest.json"
+    runtime.write_text("{}\n", encoding="utf-8")
+    runtime_sha = sha256_file(runtime)
+    monkeypatch.setattr(
+        project_admission_v3,
+        "_runtime_claim",
+        lambda _path: (
+            runtime.resolve(),
+            {
+                "runtime_manifest_sha256": runtime_sha,
+                "runtime_fingerprint_sha256": "f" * 64,
+            },
+        ),
+    )
+
+    result = project_admission_v3.resolve_project_entry(
+        runtime_manifest=runtime,
+        rerun_source_run=source,
+        rerun_receipt=receipt,
+        output_dir=tmp_path / "entry-campaign",
+        run_id="run_001",
+        generation_id="generation_002",
+    )
+
+    entry = Path(result["output_dir"])
+    descriptor = json.loads((entry / "descriptor.json").read_text(encoding="utf-8"))
+    assert json.loads(
+        (entry / "campaign_binding.json").read_text(encoding="utf-8")
+    ) == campaign_binding
+    assert json.loads(
+        (entry / "batch-request.json").read_text(encoding="utf-8")
+    ) == batch_request
+    assert descriptor["campaign_binding_sha256"] == sha256_file(
+        entry / "campaign_binding.json"
+    )
+    assert descriptor["batch_request_sha256"] == sha256_file(
+        entry / "batch-request.json"
+    )
