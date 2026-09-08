@@ -14,6 +14,10 @@ mkdir -p "${NXF_HOME}" || fail "NXF_HOME cannot be created: ${NXF_HOME}"
 [[ -x /opt/igv-helper/bin/igv-snapshot ]] || fail 'public igv-snapshot console script is unavailable'
 [[ -r /opt/igv-pipeline/runtime-manifest.json ]] || fail 'embedded runtime manifest is unavailable'
 /usr/local/bin/runtime-entrypoint --version | grep -Fx 'igv-snapshot 3.0.0'
+for maintenance_command in reconcile export-snapshots; do
+    /usr/local/bin/runtime-entrypoint "${maintenance_command}" --help >/dev/null
+done
+printf '%s\n' 'MAINTENANCE_ENTRYPOINT_SELF_TEST=PASS'
 
 python - <<'PY'
 import importlib.metadata as metadata

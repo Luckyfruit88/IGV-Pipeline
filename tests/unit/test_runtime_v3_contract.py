@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -78,7 +79,7 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert 'ENTRYPOINT ["runtime-entrypoint"]' in dockerfile
     assert 'CMD ["--help"]' in dockerfile
     assert 'doctor|run|rerun-failed|review|publish|campaign)' in entrypoint
-    assert 'init|import-v2)' in entrypoint
+    assert 'init|import-v2|reconcile|export-snapshots)' in entrypoint
     assert '--help|-h|--version)' in entrypoint
     assert 'exec "${cli}" "$@"' in entrypoint
     assert '[[ "$1" == "nextflow" ]]' in entrypoint
@@ -124,6 +125,29 @@ def test_contract_ci_uses_the_checksum_pinned_nextflow_launcher() -> None:
     assert '"${NXF_LAUNCHER}" lint .' in workflow
     assert workflow.count('"${NXF_LAUNCHER}" run .') == 3
     assert "java -jar" not in workflow
+
+
+@pytest.mark.parametrize("command", ["reconcile", "export-snapshots"])
+@pytest.mark.parametrize("prefix", [[], ["igv-snapshot"]])
+def test_maintenance_entrypoints_do_not_require_runtime_output(tmp_path, command, prefix):
+    import os
+    import shlex
+
+    if os.geteuid() == 0:
+        pytest.skip("production entrypoint intentionally rejects root")
+    cli = tmp_path / "maintenance-cli"
+    cli.write_text('#!/bin/bash\nprintf "CLI_ARG=%s\\n" "$@"\n')
+    cli.chmod(0o755)
+    entrypoint = tmp_path / "entrypoint"
+    entrypoint.write_text(_text("containers/bin/runtime-entrypoint").replace(
+        "readonly cli=/opt/igv-helper/bin/igv-snapshot", "readonly cli=" + shlex.quote(str(cli))))
+    absent = tmp_path / "unmounted-output"
+    result = subprocess.run(["bash", str(entrypoint), *prefix, command, "--help"],
+                            env={**os.environ, "IGV_OUTPUT_ROOT": str(absent)},
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["CLI_ARG=" + command, "CLI_ARG=--help"]
+    assert not absent.exists()
 
 
 def test_runtime_entrypoint_self_tests_only_execution_capable_commands() -> None:
