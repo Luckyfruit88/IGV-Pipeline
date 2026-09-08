@@ -1,0 +1,27 @@
+name: refactor-source-export
+
+on:
+  push:
+    branches: [refactor/lightweight-core-20260908]
+    paths: [.github/workflows/refactor-source.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.ref == 'refs/heads/refactor/lightweight-core-20260908'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Export tracked source without credentials
+        run: git archive --format=tar HEAD > "$RUNNER_TEMP/source.tar"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: refactor-source
+          path: ${{ runner.temp }}/source.tar
+          retention-days: 1
+          if-no-files-found: error
