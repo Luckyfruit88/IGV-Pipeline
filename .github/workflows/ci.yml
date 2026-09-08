@@ -3,7 +3,7 @@ name: contract-ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "refactor/lightweight-*"]
 
 permissions:
   contents: read
@@ -186,6 +186,16 @@ jobs:
             --tmpfs /work:rw,nosuid,nodev,size=512m \
             --entrypoint runtime-self-test \
             igv-pipeline:ci
+
+      - name: Run optional real IGV smoke example
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/real-smoke-output"
+          docker run --rm --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" --network none \
+            --mount "type=bind,src=${RUNNER_TEMP}/real-smoke-output,dst=/output" \
+            igv-pipeline:ci smoke-test --output /output/smoke
 
       - name: Run raw ssQTL through the native project DAG
         shell: bash
