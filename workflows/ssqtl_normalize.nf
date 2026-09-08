@@ -1,5 +1,5 @@
 include { NORMALIZE_SSQTL_V3 } from '../modules/local/normalize_ssqtl_v3'
-include { RESOLVE_EXECUTION_POLICY } from '../modules/local/resolve_execution_policy'
+include { RESOLVE_EXECUTION_POLICY; executionPolicyForCache } from '../modules/local/resolve_execution_policy'
 include { VALIDATE_RUNTIME_IDENTITY } from '../modules/local/validate_runtime_identity'
 
 workflow SSQTL_NORMALIZE {
@@ -53,7 +53,7 @@ workflow SSQTL_NORMALIZE {
     )
     executionPolicy = RESOLVE_EXECUTION_POLICY.out.policy.first()
     executionPolicyDoc = executionPolicy
-        .map { policyPath -> policyPath.text }
+        .map { policyPath -> executionPolicyForCache(policyPath.text) }
         .first()
 
     VALIDATE_RUNTIME_IDENTITY(

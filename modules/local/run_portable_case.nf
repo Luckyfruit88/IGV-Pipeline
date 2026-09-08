@@ -82,6 +82,10 @@ process RUN_PORTABLE_CASE {
     export LANG=C.UTF-8
     export IGV_RUNTIME_FINGERPRINT_SHA256='${runtime_fingerprint_sha256}'
     export IGV_HEAP='${attemptPolicy.igv_heap_argument}'
+    export IGV_CPUS='${attemptPolicy.cpus}'
+    export OMP_NUM_THREADS='${attemptPolicy.cpus}'
+    export OPENBLAS_NUM_THREADS='${attemptPolicy.cpus}'
+    export MKL_NUM_THREADS='${attemptPolicy.cpus}'
     '${params.python}' -m ssqtl_igv.v3_worker \
         --task-json-b64 '${taskPayload}' \
         --task-id '${task_id}' \

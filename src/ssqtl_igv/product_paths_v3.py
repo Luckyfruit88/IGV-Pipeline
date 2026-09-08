@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .utils import sha256_file
+from .snapshot_store import snapshot_view
 
 
 def contract_root(run_root: Path) -> Path:
@@ -19,13 +20,16 @@ def contract_root(run_root: Path) -> Path:
 def cases_root(run_root: Path) -> Path:
     """Return the internal case-result root without exposing it publicly."""
 
+    view = snapshot_view(run_root)
+    if view != run_root.resolve() and (view / ".igv-pipeline/cases").is_dir():
+        return view / ".igv-pipeline/cases"
     legacy = run_root / "results" / "cases"
     hidden = run_root / ".igv-pipeline" / "cases"
     return legacy if legacy.is_dir() and not legacy.is_symlink() else hidden
 
 
 def snapshot_record(run_root: Path, task_id: str) -> dict[str, str]:
-    manifest = run_root / "snapshots.tsv"
+    manifest = snapshot_view(run_root) / "snapshots.tsv"
     if manifest.is_symlink() or not manifest.is_file():
         raise ValueError(f"snapshot manifest is unavailable: {manifest}")
     with manifest.open(encoding="utf-8", newline="") as handle:
@@ -64,18 +68,23 @@ def resolve_case_artifact(
     """
 
     root = run_root.resolve(strict=True)
+    view = snapshot_view(root)
     relative = Path(str(record.get("relative_path", record.get("path", ""))))
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise ValueError(f"unsafe case artifact path: {relative}")
     candidate = root / relative
-    if not candidate.is_file() and role in {"review_image", "combined_png"}:
+    if view != root and role not in {"review_image", "combined_png"}:
+        task_id = str(case_result.get("task_id", ""))
+        if relative.parts[:3] == ("results", "cases", task_id):
+            candidate = cases_root(root) / task_id / Path(*relative.parts[3:])
+    if (view != root or not candidate.is_file()) and role in {"review_image", "combined_png"}:
         task_id = str(case_result.get("task_id", ""))
         snapshot = snapshot_record(root, task_id)
         if snapshot["status"] != "SNAPSHOT_READY":
             raise ValueError(f"eligible review snapshot is not ready: {task_id}")
         if snapshot["sha256"] != str(record.get("sha256", "")):
             raise ValueError(f"snapshot differs from case-result binding: {task_id}")
-        candidate = root / snapshot["relative_path"]
+        candidate = snapshot_view(root) / snapshot["relative_path"]
     elif not candidate.is_file():
         task_id = str(case_result.get("task_id", ""))
         prefix = ("results", "cases", task_id)

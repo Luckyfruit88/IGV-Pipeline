@@ -28,48 +28,7 @@ from .contracts import (
 from .utils import atomic_write_json, atomic_write_text, command_prefix, sha256_file, utc_now
 
 
-_LOCUS_CLIPBOARD_PROBE_JAVA = r"""
-import java.awt.Robot;
-import java.awt.Toolkit;
-import java.awt.datatransfer.DataFlavor;
-import java.awt.datatransfer.StringSelection;
-import java.awt.event.InputEvent;
-import java.awt.event.KeyEvent;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-
-public final class LocusClipboardProbe {
-    public static void main(String[] args) throws Exception {
-        int x = Integer.parseInt(args[0]);
-        int y = Integer.parseInt(args[1]);
-        Toolkit toolkit = Toolkit.getDefaultToolkit();
-        toolkit.getSystemClipboard().setContents(
-            new StringSelection("__SSQTL_LOCUS_COPY_NOT_OBSERVED__"), null
-        );
-        Robot robot = new Robot();
-        robot.setAutoDelay(60);
-        robot.mouseMove(x, y);
-        robot.mousePress(InputEvent.BUTTON1_MASK);
-        robot.mouseRelease(InputEvent.BUTTON1_MASK);
-        robot.keyPress(KeyEvent.VK_CONTROL);
-        robot.keyPress(KeyEvent.VK_A);
-        robot.keyRelease(KeyEvent.VK_A);
-        robot.keyRelease(KeyEvent.VK_CONTROL);
-        robot.keyPress(KeyEvent.VK_CONTROL);
-        robot.keyPress(KeyEvent.VK_C);
-        robot.keyRelease(KeyEvent.VK_C);
-        robot.keyRelease(KeyEvent.VK_CONTROL);
-        Thread.sleep(300L);
-        Object value = toolkit.getSystemClipboard().getData(DataFlavor.stringFlavor);
-        robot.keyPress(KeyEvent.VK_ESCAPE);
-        robot.keyRelease(KeyEvent.VK_ESCAPE);
-        robot.keyPress(KeyEvent.VK_TAB);
-        robot.keyRelease(KeyEvent.VK_TAB);
-        String text = value == null ? "" : value.toString();
-        System.out.print(Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8)));
-    }
-}
-""".strip()
+_LOCUS_PROBE_ROOT = Path("/opt/igv-probes")
 
 
 class DesktopFailure(RuntimeError):
@@ -289,36 +248,39 @@ def _probe_locus_control_text(
     evidence have been captured.  It never edits the field or the screenshot.
     """
 
-    probe_dir = evidence_dir / "native_control_probe"
-    probe_dir.mkdir(parents=True, exist_ok=True)
-    source = probe_dir / "LocusClipboardProbe.java"
-    atomic_write_text(source, _LOCUS_CLIPBOARD_PROBE_JAVA + "\n")
     runtime_env = {**os.environ, **(env or {})}
-    javac = shutil.which("javac", path=runtime_env.get("PATH"))
-    java = shutil.which("java", path=runtime_env.get("PATH"))
-    if not javac or not java:
+    java = Path(runtime_env.get("IGV_JAVA_HOME", "/opt/igv/jdk-11")) / "bin" / "java"
+    java_home = java.parent.parent
+    runtime_env["LD_LIBRARY_PATH"] = ":".join(filter(None, (
+        "/opt/igv-helper/lib", str(java_home / "lib"), str(java_home / "lib/server"), runtime_env.get("LD_LIBRARY_PATH"))))
+    compiled_class = _LOCUS_PROBE_ROOT / "LocusClipboardProbe.class"
+    checksums = _LOCUS_PROBE_ROOT / "SHA256SUMS"
+    if not java.is_file() or not compiled_class.is_file() or not checksums.is_file():
         return {
             "status": "UNAVAILABLE",
             "method": "java_awt_robot_clipboard_exact",
-            "message": "java/javac unavailable in the desktop runtime",
+            "message": "pinned Java runtime or precompiled locus probe is unavailable",
         }
-    compiled = _run(
-        [javac, str(source)],
-        env=runtime_env,
-        timeout=30,
-    )
-    if compiled.returncode != 0:
+    try:
+        expected = dict((line.split()[1], line.split()[0]) for line in checksums.read_text().splitlines() if line.strip())
+    except (OSError, UnicodeDecodeError, IndexError):
+        return {"status": "ERROR", "method": "java_awt_robot_clipboard_exact",
+                "message": "precompiled locus probe checksum manifest is invalid"}
+    probe_sha = sha256_file(compiled_class)
+    if expected.get(compiled_class.name) != probe_sha:
         return {
             "status": "ERROR",
             "method": "java_awt_robot_clipboard_exact",
-            "message": compiled.stderr.strip() or compiled.stdout.strip(),
+            "message": "precompiled locus probe checksum differs",
         }
     completed = _run(
         [
-            java,
+            str(java),
+            "-Xmx128m",
+            "-XX:ActiveProcessorCount=1",
             "-Djava.awt.headless=false",
             "-cp",
-            str(probe_dir),
+            str(_LOCUS_PROBE_ROOT),
             "LocusClipboardProbe",
             str(int(screen_point[0])),
             str(int(screen_point[1])),
@@ -343,6 +305,7 @@ def _probe_locus_control_text(
     return {
         "status": "OBSERVED",
         "method": "java_awt_robot_clipboard_exact",
+        "probe_sha256": probe_sha,
         "screen_point": {"x": int(screen_point[0]), "y": int(screen_point[1])},
         "observed_text": observed[:4000],
         "observed_normalized": normalize_locus_text(observed)[:8000],

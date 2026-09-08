@@ -35,7 +35,12 @@ assert manifest["pipeline"] == {"name": "igv-pipeline", "version": "3.0.0"}
 PY
 
 self_test_root="$(mktemp -d "${NXF_HOME}/runtime-self-test.XXXXXX")"
+probe_display_pid=''
 cleanup() {
+    if [[ -n "${probe_display_pid}" ]]; then
+        kill "${probe_display_pid}" 2>/dev/null || true
+        wait "${probe_display_pid}" 2>/dev/null || true
+    fi
     rm -rf -- "${self_test_root}"
 }
 trap cleanup EXIT
@@ -76,6 +81,25 @@ fc-match --format '%{family}\n' sans-serif | head -n 1 | grep -F 'DejaVu Sans' >
 /opt/java-21/bin/java -version 2>&1 | grep -Eq 'version "21\.'
 /opt/java-21/bin/java -version 2>&1 | grep -F '21.0.8'
 /opt/igv/bin/igv --runtime-self-test
+(cd /opt/igv-probes && sha256sum --check --strict SHA256SUMS)
+Xvfb -displayfd 3 -screen 0 640x480x24 -nolisten tcp \
+    3>"${self_test_root}/probe.display" \
+    >"${self_test_root}/probe.xvfb.log" 2>&1 &
+probe_display_pid=$!
+for probe_wait in {1..50}; do
+    [[ -s "${self_test_root}/probe.display" ]] && break
+    kill -0 "${probe_display_pid}" 2>/dev/null || fail 'probe Xvfb exited'
+    sleep 0.1
+done
+read -r probe_display < "${self_test_root}/probe.display" || fail 'probe Xvfb did not become ready'
+[[ "${probe_display}" =~ ^[0-9]+$ ]] || fail 'probe Xvfb returned an invalid display'
+DISPLAY=":${probe_display}" LD_LIBRARY_PATH="/opt/igv-helper/lib:/opt/igv/jdk-11/lib:/opt/igv/jdk-11/lib/server${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    /opt/igv/jdk-11/bin/java -Xmx128m -XX:ActiveProcessorCount=1 -Djava.awt.headless=false \
+    -cp /opt/igv-probes LocusClipboardProbe --self-test \
+    | grep -Fx 'LOCUS_PROBE_SELF_TEST=PASS'
+kill "${probe_display_pid}"
+wait "${probe_display_pid}" 2>/dev/null || true
+probe_display_pid=''
 rpm -q --qf '%{VERSION}-%{RELEASE}\n' xorg-x11-server-Xvfb \
     | grep -Fx '1.20.11-28.el8_10.3'
 if ! nextflow_info="$(/usr/local/bin/nextflow info 2>&1)"; then

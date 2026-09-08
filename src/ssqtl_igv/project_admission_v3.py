@@ -766,9 +766,11 @@ def _read_product_tsv(
 
 
 def _validate_snapshot_product(root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    from .snapshot_store import snapshot_view
     if root.is_symlink() or not root.resolve(strict=True).is_dir():
         raise ValueError(f"snapshot product must be a regular directory: {root}")
     root = root.resolve(strict=True)
+    root = snapshot_view(root)
     rows = _read_product_tsv(root, "snapshots.tsv", _SNAPSHOT_FIELDS)
     failures = _read_product_tsv(root, "failed_cases.tsv", _FAILURE_FIELDS)
     task_ids: set[str] = set()
@@ -835,162 +837,44 @@ def _fsync_directory(path: Path) -> None:
 
 
 def merge_snapshot_outputs(
-    destination_dir: str | Path, incoming_dir: str | Path
+    destination_dir: str | Path, incoming_dir: str | Path,
+    *, expected_task_ids: list[str] | None = None, master_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Append one immutable batch product without overwriting prior snapshots.
+    """Accept one immutable batch using a generation commit, without old PNG copies."""
+    from .snapshot_store import SnapshotTransaction, merge_failure_rows, snapshot_view
 
-    The full next chromosome tree is prepared under the destination filesystem.
-    A short exclusive lock then swaps only complete trees/files using POSIX
-    rename. Replaying an identical task/checksum is idempotent; any divergent
-    task, manifest order, or filename collision fails closed.
-    """
-
-    destination = Path(destination_dir).expanduser().resolve(strict=True)
-    incoming = Path(incoming_dir).expanduser().resolve(strict=True)
-    if destination == incoming:
+    destination = Path(destination_dir).expanduser().resolve(strict=False)
+    incoming_root = Path(incoming_dir).expanduser().resolve(strict=True)
+    if destination == incoming_root:
         raise ValueError("incoming snapshot product must differ from destination")
-    destination_rows, destination_failures = _validate_snapshot_product(destination)
+    incoming = snapshot_view(incoming_root)
     incoming_rows, incoming_failures = _validate_snapshot_product(incoming)
-    control = destination / ".igv-pipeline"
-    if control.is_symlink() or not control.is_dir():
-        raise ValueError("destination lacks its internal snapshot control directory")
-    lock_path = control / "snapshot-publication.lock"
-    if lock_path.is_symlink():
-        raise ValueError("snapshot publication lock must not be a symlink")
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        # Re-read while holding the lock so a concurrent completed batch cannot
-        # be silently discarded by a stale pre-lock view.
-        destination_rows, destination_failures = _validate_snapshot_product(destination)
-        rows_by_task = {row["task_id"]: row for row in destination_rows}
-        orders = {int(row["manifest_order"]): row["task_id"] for row in destination_rows}
-        paths = {
-            row["relative_path"]: row["task_id"]
-            for row in destination_rows
-            if row["relative_path"]
-        }
-        new_rows = 0
+    with SnapshotTransaction(destination, expected_task_ids=expected_task_ids, master_sha256=master_sha256) as transaction:
+        rows_by_task = {row["task_id"]: row for row in transaction.rows}
+        orders = {int(row["manifest_order"]): row["task_id"] for row in transaction.rows}
+        new_rows = []
         for row in incoming_rows:
             existing = rows_by_task.get(row["task_id"])
             if existing is not None:
                 if existing != row:
-                    raise ValueError(
-                        "snapshot task already exists with different metadata/checksum: "
-                        f"{row['task_id']}"
-                    )
+                    raise ValueError("snapshot task already exists with different metadata/checksum: " + row["task_id"])
                 continue
             order = int(row["manifest_order"])
             if order in orders:
-                raise ValueError(
-                    f"snapshot manifest_order collision: {order}:{orders[order]}:{row['task_id']}"
-                )
-            relative = row["relative_path"]
-            if relative and relative in paths:
-                raise ValueError(
-                    f"snapshot filename collision: {relative}:{paths[relative]}:{row['task_id']}"
-                )
+                raise ValueError(f"snapshot manifest_order collision: {order}")
             rows_by_task[row["task_id"]] = row
             orders[order] = row["task_id"]
-            if relative:
-                paths[relative] = row["task_id"]
-            new_rows += 1
-        incoming_failure_map = {row["task_id"]: row for row in incoming_failures}
-        failure_map = {row["task_id"]: row for row in destination_failures}
-        for task_id, row in incoming_failure_map.items():
-            existing = failure_map.get(task_id)
-            if existing is not None and existing != row:
-                raise ValueError(f"failed-case metadata collision: {task_id}")
-            failure_map[task_id] = row
-        if new_rows == 0:
-            return {
-                "schema_version": "3.0-snapshot-merge",
-                "status": "IDEMPOTENT",
-                "added_case_count": 0,
-                "total_case_count": len(destination_rows),
-                "snapshots_sha256": sha256_file(destination / "snapshots.tsv"),
-            }
-
-        staging = control / f".snapshot-merge-{uuid.uuid4().hex}"
-        backup = control / f".snapshot-backup-{uuid.uuid4().hex}"
-        staging.mkdir(mode=0o700)
-        backup.mkdir(mode=0o700)
-        try:
-            shutil.copytree(destination / "snapshots", staging / "snapshots")
-            destination_task_ids = {item["task_id"] for item in destination_rows}
-            for row in incoming_rows:
-                if (
-                    row["task_id"] not in destination_task_ids
-                    and row["status"] == "SNAPSHOT_READY"
-                ):
-                    source = incoming / row["relative_path"]
-                    target = staging / row["relative_path"]
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    if target.exists():
-                        if sha256_file(target) != row["sha256"]:
-                            raise ValueError(
-                                "snapshot target exists with a different checksum: "
-                                f"{row['relative_path']}"
-                            )
-                    else:
-                        shutil.copyfile(source, target)
-                    if sha256_file(target) != row["sha256"]:
-                        raise ValueError(f"staged snapshot checksum drift: {row['task_id']}")
-            merged_rows = sorted(rows_by_task.values(), key=lambda row: int(row["manifest_order"]))
-            merged_failures = sorted(
-                failure_map.values(), key=lambda row: int(row["manifest_order"])
-            )
-            write_tsv(staging / "snapshots.tsv", list(_SNAPSHOT_FIELDS), merged_rows)
-            write_tsv(staging / "failed_cases.tsv", list(_FAILURE_FIELDS), merged_failures)
-            summary = {
-                "schema_version": "3.0",
-                "pipeline_version": "3.0.0",
-                "authoritative": False,
-                "projection_kind": "UX_ONLY",
-                "status": "CASE_FAILURES" if merged_failures else "SNAPSHOTS_READY",
-                "exit_code": 2 if merged_failures else 0,
-                "expected_case_count": len(merged_rows),
-                "observed_case_count": len(merged_rows),
-                "failed_case_count": len(merged_failures),
-                "publication_state": "SNAPSHOTS_READY",
-                "updated_at": utc_now(),
-                "source_digests": {
-                    "snapshots": sha256_file(staging / "snapshots.tsv"),
-                    "failed_cases": sha256_file(staging / "failed_cases.tsv"),
-                },
-            }
-            atomic_write_json(staging / "run_summary.json", summary)
-            _validate_snapshot_product(staging)
-            names = ("snapshots", "snapshots.tsv", "failed_cases.tsv", "run_summary.json")
-            backed_up: list[str] = []
-            installed: list[str] = []
-            try:
-                for name in names:
-                    os.replace(destination / name, backup / name)
-                    backed_up.append(name)
-                for name in names:
-                    os.replace(staging / name, destination / name)
-                    installed.append(name)
-                _fsync_directory(destination)
-            except BaseException:
-                for name in reversed(installed):
-                    if (destination / name).exists():
-                        os.replace(destination / name, staging / name)
-                for name in reversed(backed_up):
-                    if (backup / name).exists():
-                        os.replace(backup / name, destination / name)
-                _fsync_directory(destination)
-                raise
-            shutil.rmtree(backup)
-            shutil.rmtree(staging)
-            return {
-                "schema_version": "3.0-snapshot-merge",
-                "status": "PUBLISHED",
-                "commit_mode": "LOCKED_POSIX_RENAME_NFS_COMPAT",
-                "added_case_count": new_rows,
-                "total_case_count": len(merged_rows),
-                "snapshots_sha256": sha256_file(destination / "snapshots.tsv"),
-            }
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            shutil.rmtree(backup, ignore_errors=True)
-            raise
+            new_rows.append(row)
+        failures = merge_failure_rows(transaction.failures, incoming_failures)
+        if not new_rows:
+            return {"schema_version": "3.0-snapshot-merge", "status": "IDEMPOTENT",
+                    "added_case_count": 0, "total_case_count": len(transaction.rows),
+                    "snapshots_sha256": sha256_file(transaction.view / "snapshots.tsv")}
+        rows = sorted(rows_by_task.values(), key=lambda row: int(row["manifest_order"]))
+        result = transaction.publish(rows, failures,
+            images={r["task_id"]: incoming / r["relative_path"] for r in new_rows if r["status"] == "SNAPSHOT_READY"},
+            summary=transaction.summary)
+        return {"schema_version": "3.0-snapshot-merge", "status": "PUBLISHED",
+                "commit_mode": result["commit_mode"], "generation_id": result["generation_id"],
+                "added_case_count": len(new_rows), "total_case_count": len(rows),
+                "snapshots_sha256": result["snapshots_sha256"]}

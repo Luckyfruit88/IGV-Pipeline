@@ -55,6 +55,24 @@ def test_default_policy_is_deterministic_and_uses_bounded_attempt_ladder() -> No
     assert first["normalization"]["error_strategy"] == "terminate"
 
 
+def test_retry_never_requests_more_than_the_current_allocation() -> None:
+    policy = resolve_execution_policy(envelope=_envelope(memory=10 * GIB), execution_mode="test")
+    available = policy["resource_envelope"]["usable_memory_bytes"]
+    assert available == 8 * GIB
+    assert all(row["memory_bytes"] <= available for row in policy["render"]["attempts"])
+    assert [row["memory_bytes"] for row in policy["render"]["attempts"]] == [8 * GIB] * 3
+    assert [row["timeout_seconds"] for row in policy["render"]["attempts"]] == [1800, 3600, 5400]
+
+
+def test_policy_validator_rejects_forged_oversized_retry() -> None:
+    from ssqtl_igv.execution_policy import validate_execution_policy
+    policy = resolve_execution_policy(envelope=_envelope(memory=10 * GIB), execution_mode="test")
+    policy["render"]["attempts"][-1].update(memory_bytes=24 * GIB, igv_heap_bytes=22 * GIB, igv_heap_argument="22g")
+    policy["execution_policy_sha256"] = sha256_json({key: value for key, value in policy.items() if key != "execution_policy_sha256"})
+    with pytest.raises(ValueError, match="allocation memory"):
+        validate_execution_policy(policy)
+
+
 def test_unknown_memory_falls_back_to_one_and_rejects_unsafe_explicit_parallel() -> None:
     policy = resolve_execution_policy(
         envelope=_envelope(cpus=32, memory=None),

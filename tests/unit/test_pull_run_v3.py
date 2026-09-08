@@ -508,6 +508,19 @@ def _snapshot_product(root: Path, rows: list[tuple[int, str, str, bytes]]) -> No
     )
 
 
+def test_ineligible_render_is_accounted_even_without_a_domain_exception(tmp_path):
+    task = {"task_id": "debug_case", "adapter_id": "generic", "core": {"locus": {"contig": "chr1"}}}
+    result = _case_result("debug_case", 1, eligible=False)
+    result["failures"] = []
+    result["debug_only"] = True
+    orchestrator_v3._write_direct_output_tables(tmp_path, [task], [result])
+    with (tmp_path / "failed_cases.tsv").open() as stream:
+        rows = list(csv.DictReader(stream, delimiter="\t"))
+    assert [r["task_id"] for r in rows] == ["debug_case"]
+    assert rows[0]["failure_code"] == "DEBUG_ONLY_EVIDENCE"
+    assert result["failures"] == []  # The bound terminal result is not rewritten.
+
+
 def test_snapshot_batches_append_and_replay_idempotently(tmp_path: Path) -> None:
     destination = tmp_path / "production"
     incoming = tmp_path / "batch-002"
@@ -518,7 +531,7 @@ def test_snapshot_batches_append_and_replay_idempotently(tmp_path: Path) -> None
     replayed = merge_snapshot_outputs(destination, incoming)
 
     assert merged["status"] == "PUBLISHED"
-    assert merged["commit_mode"] == "LOCKED_POSIX_RENAME_NFS_COMPAT"
+    assert merged["commit_mode"] == "IMMUTABLE_OBJECTS_ATOMIC_CURRENT"
     assert merged["added_case_count"] == 1
     assert replayed["status"] == "IDEMPOTENT"
     with (destination / "snapshots.tsv").open(encoding="utf-8", newline="") as handle:

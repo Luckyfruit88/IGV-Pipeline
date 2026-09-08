@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -397,3 +398,18 @@ def test_schema_rejects_invalid_timestamp_and_path_traversal() -> None:
     result["artifacts"][0]["relative_path"] = "../private.bam"
     with pytest.raises(ContractValidationError, match="relative_path"):
         validate_case_result_document(result)
+
+
+def test_schema_compilation_cache_observes_changed_contract_and_invalid_documents(tmp_path):
+    schema = {"type": "object", "properties": {"value": {"const": 1}}, "required": ["value"]}
+    path = tmp_path / SCHEMA_FILES["task"]
+    path.write_text(json.dumps(schema))
+    validate_schema_document({"value": 1}, "task", schema_dir=tmp_path)
+    with pytest.raises(ContractValidationError, match="was expected"):
+        validate_schema_document({"value": 2}, "task", schema_dir=tmp_path)
+    # The same pathname and byte length must not make an edited schema stale.
+    schema["properties"]["value"]["const"] = 2
+    path.write_text(json.dumps(schema))
+    validate_schema_document({"value": 2}, "task", schema_dir=tmp_path)
+    with pytest.raises(ContractValidationError, match="was expected"):
+        validate_schema_document({"value": 1}, "task", schema_dir=tmp_path)

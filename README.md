@@ -828,3 +828,14 @@ resume、新 generation rerun、可选人工决定和原子发布。process atte
 lineage 只存在于 Nextflow trace/cache；campaign 和 review record 不复制它们。
 
 更多信息见[控制模型](docs/architecture/control-model.md)、[runtime contract](docs/runtime/portable-runtime-v3.md)和[旧 v2 指南](docs/legacy-v2-user-guide.zh-CN.md)。
+
+## Recover completed work
+
+`igv-snapshot reconcile --output RUN` rebuilds the product status from retained
+terminal evidence without rerendering. For chunked ssQTL campaigns, use
+`igv-snapshot campaign reconcile --campaign-dir CAMPAIGN --runs-dir RUNS --output COLLECTION`.
+The collection must be separate from the source workspaces.
+
+Recovery, allocation-aware scheduling, native locus verification, the atomic
+snapshot storage format, and flat-file export are documented in
+[Engineering closure](docs/engineering-closure.md).

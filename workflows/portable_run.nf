@@ -1,5 +1,5 @@
 include { RUN_PORTABLE_CASE } from '../modules/local/run_portable_case'
-include { RESOLVE_EXECUTION_POLICY } from '../modules/local/resolve_execution_policy'
+include { RESOLVE_EXECUTION_POLICY; executionPolicyForCache } from '../modules/local/resolve_execution_policy'
 include { VALIDATE_RUNTIME_IDENTITY } from '../modules/local/validate_runtime_identity'
 
 
@@ -85,7 +85,7 @@ workflow PORTABLE_RUN {
     )
     executionPolicy = RESOLVE_EXECUTION_POLICY.out.policy.first()
     executionPolicyDoc = executionPolicy
-        .map { policyPath -> policyPath.text }
+        .map { policyPath -> executionPolicyForCache(policyPath.text) }
         .first()
 
     VALIDATE_RUNTIME_IDENTITY(

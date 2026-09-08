@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -131,14 +132,9 @@ def load_schema(name: str, *, schema_dir: str | Path | None = None) -> dict[str,
     return value
 
 
-def validate_schema_document(
-    document: Mapping[str, Any],
-    schema_name: str,
-    *,
-    schema_dir: str | Path | None = None,
-) -> None:
-    """Validate one document with Draft 2020-12 and stable diagnostics."""
-
+@lru_cache(maxsize=32)
+def _checked_schema_validator(schema_content: str):
+    """Reuse schema compilation, keyed by content so edited contracts take effect."""
     try:
         from jsonschema import Draft202012Validator, FormatChecker
     except ImportError as exc:  # pragma: no cover - dependency packaging guard
@@ -156,10 +152,23 @@ def validate_schema_document(
         parsed = datetime.fromisoformat(normalized)
         return parsed.tzinfo is not None
 
-    schema = load_schema(schema_name, schema_dir=schema_dir)
+    schema = json.loads(schema_content)
     Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=format_checker)
+
+
+def validate_schema_document(
+    document: Mapping[str, Any],
+    schema_name: str,
+    *,
+    schema_dir: str | Path | None = None,
+) -> None:
+    """Validate every document, sharing only compilation of identical schemas."""
+
+    schema = load_schema(schema_name, schema_dir=schema_dir)
+    validator = _checked_schema_validator(json.dumps(schema, sort_keys=True, separators=(",", ":")))
     errors = sorted(
-        Draft202012Validator(schema, format_checker=format_checker).iter_errors(dict(document)),
+        validator.iter_errors(dict(document)),
         key=lambda error: tuple(str(part) for part in error.absolute_path),
     )
     if errors:

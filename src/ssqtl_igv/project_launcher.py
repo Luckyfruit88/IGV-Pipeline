@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import csv
+import fcntl
+import hashlib
 import json
 import os
 import re
 import subprocess
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,12 +20,85 @@ from .utils import (
     read_jsonl,
     reject_symlink_path_components,
     sha256_file,
+    utc_now,
 )
 
 
 _CASE_PROCESS = re.compile(r"(?:^|:)RUN_PORTABLE_CASE\s*\(([^()]*)\)$")
 _FINAL_TRACE_STATES = {"COMPLETED", "CACHED"}
 _RETRY_TRACE_EXITS = {"75", "137", "143"}
+
+
+@contextmanager
+def exclusive_run_output(output: Path):
+    """One controller/reconciler owns a run; a second caller never waits blindly."""
+    reports = reject_symlink_path_components(output / "reports", label="reports")
+    reports.mkdir(parents=True, exist_ok=True)
+    lock_path = reports / "controller.lock"
+    if lock_path.is_symlink():
+        raise ValueError("controller lock must not be a symlink")
+    with lock_path.open("a+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("another controller owns this run output") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def observed_run_output(output: Path):
+    """Observe a completed producer without writing to its retained workspace."""
+    lock_path = reject_symlink_path_components(output / "reports/controller.lock", label="producer lock")
+    if not lock_path.exists():
+        yield  # Legacy producers have no lease; their retained evidence is checked.
+        return
+    with lock_path.open("r") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("batch producer is still active") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _summary_projection(root: Path, derived: dict[str, Any], *, view: Path | None = None, write: bool = True) -> dict[str, Any]:
+    """Retain old observations, then rebuild the UX projection from evidence."""
+    path = (view or root) / "run_summary.json"
+    if path.is_symlink():
+        raise ValueError("run summary must not be a symlink")
+    previous: dict[str, Any] = {}
+    raw = path.read_bytes() if path.is_file() else None
+    if raw is not None:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                previous = parsed
+        except (ValueError, UnicodeDecodeError):
+            pass
+    projection = {**previous, **derived}
+    if isinstance(previous.get("source_digests"), dict):
+        projection["source_digests"] = {**previous["source_digests"], **derived.get("source_digests", {})}
+    projection.pop("reason", None)
+    projection.pop("nextflow_exit_code", None)
+    if not write or (view is not None and view != root):
+        return projection
+    if raw is not None and previous != projection:
+        history = root / "reports" / "projection-history"
+        history.mkdir(parents=True, exist_ok=True)
+        archived = history / (hashlib.sha256(raw).hexdigest() + ".json")
+        if not archived.exists():
+            with archived.open("xb") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+    if raw is None or previous != projection:
+        atomic_write_json(path, projection)
+    return projection
 
 
 def _regular_input(path: str | Path, *, label: str) -> Path:
@@ -235,11 +312,13 @@ def _case_trace_lineage(
     return lineage
 
 
-def validate_project_postflight(output: str | Path) -> dict[str, Any]:
+def validate_project_postflight(output: str | Path, *, repair_projection: bool = True) -> dict[str, Any]:
+    from .snapshot_store import snapshot_view
     root = Path(output).expanduser()
     if root.is_symlink() or not root.resolve(strict=True).is_dir():
         raise ValueError(f"completed output must be a regular non-symlink directory: {root}")
     root = root.resolve(strict=True)
+    view = snapshot_view(root)
     contract_root = root / "contract"
     case_root_parent = root / "results" / "cases"
     direct_product = False
@@ -247,19 +326,24 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
         contract_root = root / ".igv-pipeline" / "contract"
         case_root_parent = root / ".igv-pipeline" / "cases"
         direct_product = True
+    if view != root and (view / ".igv-pipeline/cases").is_dir():
+        case_root_parent = view / ".igv-pipeline/cases"
     tasks_path = contract_root / "tasks.jsonl"
     if tasks_path.is_symlink() or not tasks_path.is_file():
         raise ValueError("completed run is missing its canonical task set")
     tasks = list(read_jsonl(tasks_path))
     task_ids = [str(task.get("task_id", "")) for task in tasks]
-    if not task_ids or any(not task_id for task_id in task_ids):
+    if not task_ids or any(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,250}", task_id) is None
+        for task_id in task_ids
+    ):
         raise ValueError("canonical task set is empty or contains a missing task_id")
     if len(task_ids) != len(set(task_ids)):
         raise ValueError("canonical task set contains duplicate task IDs")
 
     failed: list[str] = []
     bundle_digests: list[dict[str, str]] = []
-    for task_id in task_ids:
+    for task, task_id in zip(tasks, task_ids):
         case_root = case_root_parent / task_id
         case_path = case_root / "case_result.json"
         bundle_path = case_root / "terminal_bundle.json"
@@ -267,9 +351,15 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
         bundle_document = _read_json_object(
             bundle_path, label=f"terminal bundle {task_id}"
         )
+        if (bundle_document.get("case_result_size") != case_path.stat().st_size
+                or bundle_document.get("case_result_sha256") != sha256_file(case_path)):
+            raise ValueError(f"case result checksum/size differs from terminal bundle: {task_id}")
         validate_v3_terminal_bundle_document(bundle_document, case_document)
         if str(case_document.get("task_id")) != task_id:
             raise ValueError(f"case result task_id differs from canonical task {task_id}")
+        for field in ("input_fingerprint", "run_id", "generation_id", "manifest_order"):
+            if field in task and case_document.get(field) != task[field]:
+                raise ValueError(f"case result {field} differs from canonical task {task_id}")
         if not bool(case_document.get("eligible")):
             failed.append(task_id)
         bundle_digests.append(
@@ -277,7 +367,7 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
         )
 
     if direct_product:
-        with (root / "snapshots.tsv").open(encoding="utf-8", newline="") as handle:
+        with (view / "snapshots.tsv").open(encoding="utf-8", newline="") as handle:
             snapshot_rows = list(csv.DictReader(handle, delimiter="\t"))
         snapshot_fields = list(snapshot_rows[0].keys()) if snapshot_rows else []
         if snapshot_fields != [
@@ -303,7 +393,7 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
                 relative = Path(row["relative_path"])
                 if relative.is_absolute() or ".." in relative.parts:
                     raise ValueError(f"snapshot path is unsafe: {task_id}")
-                snapshot = root / relative
+                snapshot = view / relative
                 if snapshot.is_symlink() or not snapshot.is_file():
                     raise ValueError(f"snapshot is unavailable: {task_id}")
                 expected_sha = str(
@@ -318,22 +408,8 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
 
     trace_path = root / "reports" / "trace.txt"
     lineage = _case_trace_lineage(trace_path, set(task_ids))
-    summary_path = root / "run_summary.json"
-    summary = _read_json_object(summary_path, label="run summary")
-    if summary.get("authoritative") is not False:
-        raise ValueError("run_summary.json must be marked authoritative:false")
     expected_status = "CASE_FAILURES" if failed else "SNAPSHOTS_READY"
     expected_exit = 2 if failed else 0
-    if summary.get("status") != expected_status:
-        raise ValueError(
-            f"run summary status {summary.get('status')!r} differs from {expected_status}"
-        )
-    if int(summary.get("exit_code", -1)) != expected_exit:
-        raise ValueError("run summary product exit code differs from terminal case evidence")
-    if int(summary.get("expected_case_count", -1)) != len(task_ids):
-        raise ValueError("run summary expected case count differs from canonical tasks")
-    if int(summary.get("observed_case_count", -1)) != len(task_ids):
-        raise ValueError("run summary observed case count differs from terminal bundles")
 
     postflight = {
         "schema_version": "3.0-project-postflight",
@@ -351,9 +427,31 @@ def validate_project_postflight(output: str | Path) -> dict[str, Any]:
         },
     }
     reports = root / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(reports / "postflight.json", postflight)
+    if view != root:
+        postflight["publication_generation"] = view.name
+    if repair_projection:
+        reports.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(reports / "postflight.json", postflight)
+    digests = {"canonical_tasks": sha256_file(tasks_path)}
+    for name in ("snapshots", "failed_cases"):
+        path = view / (name + ".tsv")
+        if path.is_file():
+            digests[name] = sha256_file(path)
+    summary = _summary_projection(root, {
+        "schema_version": "3.0", "pipeline_version": "3.0.0",
+        "authoritative": False, "projection_kind": "UX_ONLY",
+        "status": expected_status, "exit_code": expected_exit,
+        "expected_case_count": len(task_ids), "observed_case_count": len(task_ids),
+        "failed_case_count": len(failed), "rerun_required": bool(failed), "source_digests": digests,
+    }, view=view, write=repair_projection)
     return {**summary, "postflight": postflight}
+
+
+def reconcile_project_output(output: str | Path) -> dict[str, Any]:
+    """Reconcile retained terminal evidence without invoking Nextflow or IGV."""
+    root = reject_symlink_path_components(output, label="run output").resolve(strict=True)
+    with exclusive_run_output(root):
+        return validate_project_postflight(root)
 
 
 def run_project_workflow(
@@ -415,40 +513,35 @@ def run_project_workflow(
             launch_environment = normalized_nextflow_environment(
                 java, base=launch_environment
             )
-    completed = subprocess.run(
-        command,
-        check=False,
-        text=True,
-        env=launch_environment,
-        cwd=output_path,
-    )
-    if completed.returncode != 0:
-        summary = {
-            "schema_version": "3.0",
-            "pipeline_version": "3.0.0",
-            "authoritative": False,
-            "status": "INFRASTRUCTURE_FATAL",
-            "exit_code": 1,
-            "nextflow_exit_code": completed.returncode,
-        }
-        if persist_fatal_summary:
-            try:
-                atomic_write_json(output_path / "run_summary.json", summary)
-            except OSError:
-                pass
-        return summary, 1
-    try:
-        result = validate_project_postflight(output_path)
-    except (OSError, ValueError, RuntimeError) as exc:
-        summary = {
-            "schema_version": "3.0",
-            "pipeline_version": "3.0.0",
-            "authoritative": False,
-            "status": "INFRASTRUCTURE_FATAL",
-            "exit_code": 1,
-            "nextflow_exit_code": 0,
-            "reason": f"postflight validation failed: {type(exc).__name__}: {exc}",
-        }
-        atomic_write_json(output_path / "run_summary.json", summary)
-        return summary, 1
-    return result, int(result["exit_code"])
+    # ``persist_fatal_summary`` is retained for API compatibility. Failures are
+    # always attempt observations now; they must never overwrite product state.
+    with exclusive_run_output(output_path):
+        attempt = output_path / "reports" / "attempts" / uuid.uuid4().hex
+        attempt.mkdir(parents=True)
+        atomic_write_json(attempt / "start.json", {
+            "schema_version": "3.0-controller-attempt", "started_at": utc_now(),
+            "resume": resume, "command": command,
+        })
+        nextflow_exit = None
+        try:
+            completed = subprocess.run(
+                command, check=False, text=True, env=launch_environment, cwd=output_path,
+            )
+            nextflow_exit = completed.returncode
+            if nextflow_exit:
+                raise RuntimeError(f"Nextflow exited with status {nextflow_exit}")
+            result = validate_project_postflight(output_path)
+        except (OSError, ValueError, RuntimeError) as exc:
+            result = {
+                "schema_version": "3.0", "pipeline_version": "3.0.0",
+                "authoritative": False, "status": "INFRASTRUCTURE_FATAL", "exit_code": 1,
+                "nextflow_exit_code": nextflow_exit,
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        receipt = {"schema_version": "3.0-controller-attempt", "ended_at": utc_now(),
+                   "nextflow_exit_code": nextflow_exit, "product_status": result["status"],
+                   "product_exit_code": int(result["exit_code"])}
+        if "reason" in result:
+            receipt["reason"] = result["reason"]
+        atomic_write_json(attempt / "terminal.json", receipt)
+        return result, int(result["exit_code"])

@@ -1,3 +1,11 @@
+def executionPolicyForCache(String document) {
+    def policy = new groovy.json.JsonSlurperClassic().parseText(document)
+    // Keep host observations and queue capacity in the retained policy file,
+    // not in a worker's cache key. Identical work can resume on another node.
+    return groovy.json.JsonOutput.toJson([render: policy.render, normalization: policy.normalization])
+}
+
+
 process RESOLVE_EXECUTION_POLICY {
     tag "execution-policy:${execution_mode}"
     label 'control'
@@ -18,10 +26,14 @@ process RESOLVE_EXECUTION_POLICY {
     path 'execution_policy.json', emit: policy
 
     script:
+    def bootstrap = params.bootstrap_execution_policy?.toString()
+    if (!bootstrap) error('Execution policy was not resolved before scheduler startup')
+    def encoded = java.util.Base64.getUrlEncoder().encodeToString(bootstrap.getBytes('UTF-8'))
     """
     export PYTHONDONTWRITEBYTECODE=1
     '${params.python}' 'software/resolve_execution_policy.py' \
         --output execution_policy.json \
+        --from-json-b64 '${encoded}' \
         --execution-mode '${execution_mode}' \
         --max-parallel '${max_parallel}' \
         --igv-cpus '${igv_cpus}' \

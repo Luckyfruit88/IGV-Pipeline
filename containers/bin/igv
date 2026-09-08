@@ -5,6 +5,12 @@ igv_root=/opt/igv
 igv_java_home="${IGV_JAVA_HOME:-${igv_root}/jdk-11}"
 igv_java="${igv_java_home}/bin/java"
 igv_heap="${IGV_HEAP:-6g}"
+igv_cpus="${IGV_CPUS:-1}"
+
+[[ "${igv_cpus}" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'IGV runtime: invalid IGV_CPUS value: %s\n' "${igv_cpus}" >&2
+    exit 64
+}
 
 [[ "${igv_heap}" =~ ^[1-9][0-9]*[gm]$ ]] || {
     printf 'IGV runtime: invalid IGV_HEAP value: %s\n' "${igv_heap}" >&2
@@ -40,6 +46,7 @@ exec "${igv_java}" \
     -showversion \
     --module-path="${igv_root}/lib" \
     -Xmx"${igv_heap}" \
+    -XX:ActiveProcessorCount="${igv_cpus}" \
     @"${igv_root}/igv.args" \
     -Dapple.laf.useScreenMenuBar=true \
     -Djava.net.preferIPv4Stack=true \

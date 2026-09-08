@@ -27,6 +27,7 @@ from .project_admission_v3 import (
 from .project_v3 import build_project_source_binding, load_project_config
 from .publication import verify_checksum_tree
 from .rerun_v3 import freeze_case_failure_rerun
+from .snapshot_store import snapshot_view
 from .utils import (
     atomic_write_json,
     read_jsonl,
@@ -107,7 +108,7 @@ def _safe_relative_child(root: Path, relative_value: object, *, label: str) -> P
 
 
 def _state(product: Path) -> dict[str, Any] | None:
-    path = _control_root(product) / "failed-only-state.json"
+    path = snapshot_view(product) / ".igv-pipeline/rerun/failed-only-state.json"
     if not path.exists():
         return None
     value = _object(path, label="failed-only rerun state")
@@ -455,6 +456,57 @@ def _generation_record(
     }
 
 
+def validate_projected_rerun_replacements(product_root: str | Path, expected_fingerprints: Mapping[str, str]) -> None:
+    """Authorize collection updates from the same receipts used by failed-only reruns."""
+    product = _product_root(product_root)
+    state = _state(product)
+    if state is None:
+        raise ValueError("batch replacement lacks a failed-only rerun state")
+    checked = {}
+    for tid, expected_fp in expected_fingerprints.items():
+        case = cases_root(product) / tid
+        projection = _object(case / "rerun_projection.json", label="rerun projection")
+        result = _object(case / "case_result.json", label="projected case result")
+        fields = ("run_id", "generation_id", "task_id", "manifest_order", "input_fingerprint")
+        if (projection.get("schema_version") != "3.0-rerun-case-projection"
+                or projection.get("task_id") != tid or result.get("input_fingerprint") != expected_fp
+                or projection.get("canonical_identity") != {key: result[key] for key in fields}
+                or projection.get("projected_case_result_sha256") != sha256_file(case / "case_result.json")
+                or projection.get("projected_terminal_bundle_sha256") != sha256_file(case / "terminal_bundle.json")):
+            raise ValueError("rerun projection does not bind the canonical case")
+        source_identity = projection.get("source_identity", {})
+        generation_id = source_identity.get("generation_id")
+        if generation_id not in checked:
+            records = [r for r in state["generations"] if isinstance(r, Mapping) and r.get("generation_id") == generation_id]
+            if len(records) != 1:
+                raise ValueError("rerun projection generation is not uniquely registered")
+            record = records[0]
+            incoming = _safe_relative_child(product, record["output_relative_path"], label="rerun output")
+            source = product if record["source_relative_path"] == "." else _safe_relative_child(product, record["source_relative_path"], label="rerun source")
+            control = source / "rerun" if contract_root(source) == source / "contract" else source / ".igv-pipeline/rerun"
+            receipts = []
+            for path in control.glob("generations/*/rerun_receipt.json"):
+                path.resolve(strict=True).relative_to(source)
+                if not path.is_symlink() and sha256_file(path) == record["rerun_receipt_sha256"]:
+                    receipts.append(path)
+            if len(receipts) != 1:
+                raise ValueError("rerun projection receipt is unavailable or ambiguous")
+            _, requests = _rerun_request(source, receipts[0])
+            tasks = list(read_jsonl(contract_root(incoming) / "tasks.jsonl"))
+            validated, _ = _validated_terminal_case_results(incoming, tasks)
+            if (sha256_file(snapshot_view(incoming) / "snapshots.tsv") != record["snapshots_sha256"]
+                    or sha256_json([{"task_id": t["task_id"], "sha256": sha256_file(cases_root(incoming) / t["task_id"] / "terminal_bundle.json")} for t in tasks]) != record["terminal_bundle_set_sha256"]):
+                raise ValueError("registered rerun output has changed")
+            checked[generation_id] = (incoming, record, {r["source_task_id"] for r in requests}, {r["task_id"]: r for r in validated})
+        incoming, record, requested, validated = checked[generation_id]
+        original = cases_root(incoming) / tid
+        if (tid not in requested or projection.get("rerun_receipt_sha256") != record["rerun_receipt_sha256"]
+                or projection.get("source_case_result_sha256") != sha256_file(original / "case_result.json")
+                or projection.get("source_terminal_bundle_sha256") != sha256_file(original / "terminal_bundle.json")
+                or source_identity != {key: validated[tid][key] for key in fields}):
+            raise ValueError("case replacement is outside its authorized rerun")
+
+
 def reconcile_failed_rerun(
     product_root: str | Path,
     *,
@@ -483,7 +535,7 @@ def reconcile_failed_rerun(
 
     destination_rows, destination_failures = _validate_snapshot_product(product)
     incoming_rows, incoming_failures = _validate_snapshot_product(incoming)
-    destination_summary = _object(product / "run_summary.json", label="run summary")
+    destination_summary = _object(snapshot_view(product) / "run_summary.json", label="run summary")
     if [row["task_id"] for row in incoming_rows] != requested_ids:
         raise ValueError(
             "incoming generation differs from the frozen failed-only task set"
@@ -666,157 +718,42 @@ def reconcile_failed_rerun(
             "exit_code": 2 if merged_failures else 0,
         }
 
-    snapshot_lock = control / "snapshot-publication.lock"
-    if snapshot_lock.is_symlink():
-        raise ValueError("snapshot publication lock must not be a symlink")
-    with snapshot_lock.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        # Detect a concurrent product mutation after the optimistic validation.
-        locked_rows, locked_failures = _validate_snapshot_product(product)
-        if locked_rows != destination_rows or locked_failures != destination_failures:
-            raise RuntimeError(
-                "snapshot product changed while rerun reconciliation waited"
-            )
-        staging = control / f".failed-only-merge-{uuid.uuid4().hex}"
-        backup = control / f".failed-only-backup-{uuid.uuid4().hex}"
-        staging.mkdir(mode=0o700)
-        backup.mkdir(mode=0o700)
-        try:
-            shutil.copytree(product / "snapshots", staging / "snapshots")
-            staging_cases = staging / ".igv-pipeline" / "cases"
-            product_cases = cases_root(product)
-            if product_cases.is_symlink() or not product_cases.is_dir():
-                raise ValueError("destination compact case evidence is unavailable")
-            shutil.copytree(product_cases, staging_cases, symlinks=False)
+    from .snapshot_store import SnapshotTransaction
+    import tempfile
+
+    with SnapshotTransaction(product) as transaction:
+        if transaction.rows != destination_rows or transaction.failures != destination_failures:
+            raise RuntimeError("snapshot product changed while rerun reconciliation waited")
+        with tempfile.TemporaryDirectory(prefix=".case-projection-", dir=control) as temporary:
+            projected_cases = Path(temporary)
             receipt_sha256 = sha256_file(receipt_path)
             for row in incoming_rows:
-                _project_case_evidence(
-                    incoming,
-                    staging_cases,
-                    destination_task_by_id[row["task_id"]],
-                    rerun_receipt_sha256=receipt_sha256,
-                )
-                if row["status"] != "SNAPSHOT_READY":
-                    continue
-                source_image = incoming / row["relative_path"]
-                target_image = staging / row["relative_path"]
-                target_image.parent.mkdir(parents=True, exist_ok=True)
-                if target_image.exists():
-                    if sha256_file(target_image) != row["sha256"]:
-                        raise ValueError(
-                            "snapshot target exists with a different checksum: "
-                            f"{row['task_id']}"
-                        )
-                else:
-                    shutil.copyfile(source_image, target_image)
-                if sha256_file(target_image) != row["sha256"]:
-                    raise ValueError(
-                        f"staged rerun snapshot checksum drift: {row['task_id']}"
-                    )
-            write_tsv(staging / "snapshots.tsv", list(_SNAPSHOT_FIELDS), merged_rows)
-            write_tsv(
-                staging / "failed_cases.tsv", list(_FAILURE_FIELDS), merged_failures
-            )
+                _project_case_evidence(incoming, projected_cases,
+                    destination_task_by_id[row["task_id"]], rerun_receipt_sha256=receipt_sha256)
             source_digests = dict(destination_summary.get("source_digests") or {})
-            source_digests.update(
-                {
-                    "snapshots": sha256_file(staging / "snapshots.tsv"),
-                    "failed_cases": sha256_file(staging / "failed_cases.tsv"),
-                    "rerun_receipt": receipt_sha256,
-                    "rerun_generation_snapshots": sha256_file(
-                        incoming / "snapshots.tsv"
-                    ),
-                }
-            )
-            summary = {
-                **destination_summary,
-                "schema_version": "3.0",
-                "pipeline_version": "3.0.0",
-                "authoritative": False,
-                "projection_kind": "UX_ONLY",
-                "status": "CASE_FAILURES" if merged_failures else "SNAPSHOTS_READY",
-                "exit_code": 2 if merged_failures else 0,
-                "expected_case_count": len(merged_rows),
-                "observed_case_count": len(merged_rows),
-                "failed_case_count": len(failed_ids),
-                "rerun_required": bool(failed_ids),
-                "publication_state": (
-                    "NOT_READY" if merged_failures else "SNAPSHOTS_READY"
-                ),
-                "rerun_generation_count": len(generations),
-                "updated_at": utc_now(),
-                "source_digests": dict(sorted(source_digests.items())),
-            }
-            atomic_write_json(staging / "run_summary.json", summary)
-            atomic_write_json(staging / "failed-only-state.json", state)
-            _validate_snapshot_product(staging)
-            _projected_results, projected_failures = _validated_terminal_case_results(
-                staging, destination_tasks
-            )
-            if projected_failures != failed_ids:
-                raise ValueError(
-                    "projected terminal evidence differs from rerun failure coverage"
-                )
-
-            public_names = (
-                "snapshots",
-                "snapshots.tsv",
-                "failed_cases.tsv",
-                "run_summary.json",
-            )
-            backed_up: list[str] = []
-            installed: list[str] = []
-            cases_backed_up = False
-            cases_installed = False
-            state_backed_up = False
-            state_installed = False
-            try:
-                for name in public_names:
-                    os.replace(product / name, backup / name)
-                    backed_up.append(name)
-                os.replace(product_cases, backup / "cases")
-                cases_backed_up = True
-                if state_path.exists():
-                    os.replace(state_path, backup / "failed-only-state.json")
-                    state_backed_up = True
-                for name in public_names:
-                    os.replace(staging / name, product / name)
-                    installed.append(name)
-                os.replace(staging_cases, product_cases)
-                cases_installed = True
-                os.replace(staging / "failed-only-state.json", state_path)
-                state_installed = True
-                _fsync_directory(product)
-                _fsync_directory(control)
-            except BaseException:
-                if state_installed and state_path.exists():
-                    os.replace(state_path, staging / "failed-only-state.json")
-                for name in reversed(installed):
-                    if (product / name).exists():
-                        os.replace(product / name, staging / name)
-                if cases_installed and product_cases.exists():
-                    os.replace(product_cases, staging_cases)
-                if state_backed_up and (backup / "failed-only-state.json").exists():
-                    os.replace(backup / "failed-only-state.json", state_path)
-                if cases_backed_up and (backup / "cases").exists():
-                    os.replace(backup / "cases", product_cases)
-                for name in reversed(backed_up):
-                    if (backup / name).exists():
-                        os.replace(backup / name, product / name)
-                _fsync_directory(product)
-                _fsync_directory(control)
-                raise
-            shutil.rmtree(backup)
-            shutil.rmtree(staging)
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            shutil.rmtree(backup, ignore_errors=True)
-            raise
+            source_digests.update({"rerun_receipt": receipt_sha256,
+                                  "rerun_generation_snapshots": sha256_file(snapshot_view(incoming) / "snapshots.tsv")})
+            summary = {**destination_summary, "rerun_required": bool(failed_ids),
+                       "publication_state": "NOT_READY" if merged_failures else "SNAPSHOTS_READY",
+                       "rerun_generation_count": len(generations), "updated_at": utc_now(),
+                       "source_digests": source_digests}
+            def validate_projection(stage):
+                _validate_snapshot_product(stage)
+                _, observed_failures = _validated_terminal_case_results(stage, destination_tasks)
+                if observed_failures != failed_ids:
+                    raise ValueError("projected terminal evidence differs from rerun failure coverage")
+            publication = transaction.publish(merged_rows, merged_failures,
+                images={row["task_id"]: snapshot_view(incoming) / row["relative_path"]
+                        for row in incoming_rows if row["status"] == "SNAPSHOT_READY"},
+                summary=summary,
+                case_updates={row["task_id"]: projected_cases / row["task_id"] for row in incoming_rows},
+                extra_json={".igv-pipeline/rerun/failed-only-state.json": state},
+                validate=validate_projection)
 
     return {
         "schema_version": "3.0-failed-only-rerun-merge",
         "status": "PUBLISHED",
-        "commit_mode": "LOCKED_POSIX_RENAME_NFS_COMPAT",
+        "commit_mode": publication["commit_mode"],
         "generation_id": generation_record["generation_id"],
         "recovered_case_count": transitioned,
         "remaining_failed_case_count": len(failed_ids),
