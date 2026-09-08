@@ -27,6 +27,10 @@ batches do not repeatedly read/render their payloads. Lost receipts can be rebui
 from retained evidence. The complete snapshot tree is verified before a newly
 completed collection is committed.
 
+JSON Schema definitions are compiled once per distinct content in a bounded cache.
+Every task and terminal document is still validated. The schema file is read on
+each call, so replacing a schema at the same path immediately changes validation.
+
 | Exit | Status | Meaning |
 |---|---|---|
 | 0 | `SNAPSHOTS_READY` | All expected tasks have eligible images. |
