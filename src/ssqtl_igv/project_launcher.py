@@ -351,6 +351,9 @@ def validate_project_postflight(output: str | Path, *, repair_projection: bool =
         bundle_document = _read_json_object(
             bundle_path, label=f"terminal bundle {task_id}"
         )
+        if (bundle_document.get("case_result_size") != case_path.stat().st_size
+                or bundle_document.get("case_result_sha256") != sha256_file(case_path)):
+            raise ValueError(f"case result checksum/size differs from terminal bundle: {task_id}")
         validate_v3_terminal_bundle_document(bundle_document, case_document)
         if str(case_document.get("task_id")) != task_id:
             raise ValueError(f"case result task_id differs from canonical task {task_id}")

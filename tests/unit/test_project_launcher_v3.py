@@ -10,6 +10,14 @@ from ssqtl_igv import project_launcher
 from ssqtl_igv.utils import sha256_file
 
 
+def _seal_case_fixture(case_root):
+    path = case_root / "case_result.json"
+    (case_root / "terminal_bundle.json").write_text(json.dumps({
+        "task_id": "case_1", "status": "SUCCEEDED",
+        "case_result_sha256": sha256_file(path), "case_result_size": path.stat().st_size,
+    }))
+
+
 def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path / "project.yaml"
     project.write_text('schema_version: "3.0"\n', encoding="utf-8")
@@ -132,10 +140,7 @@ def _completed_output(
         json.dumps({"task_id": "case_1", "eligible": eligible}) + "\n",
         encoding="utf-8",
     )
-    (root / "results" / "cases" / "case_1" / "terminal_bundle.json").write_text(
-        json.dumps({"task_id": "case_1", "status": "SUCCEEDED"}) + "\n",
-        encoding="utf-8",
-    )
+    _seal_case_fixture(root / "results/cases/case_1")
     rows = "1\taa\t-\tPROJECT_RUN:RUN_PORTABLE_CASE (case_1)\tCOMPLETED\t0\n"
     if duplicate_final_trace:
         rows += "2\tbb\t-\tPROJECT_RUN:RUN_PORTABLE_CASE (case_1)\tCACHED\t0\n"
@@ -224,9 +229,7 @@ def test_postflight_validates_direct_snapshot_product(
         + "\n",
         encoding="utf-8",
     )
-    (case_root / "terminal_bundle.json").write_text(
-        '{"task_id":"case_1","status":"SUCCEEDED"}\n', encoding="utf-8"
-    )
+    _seal_case_fixture(case_root)
     (output / "snapshots.tsv").write_text(
         "manifest_order\ttask_id\tchromosome\trelative_path\tsha256\tstatus\n"
         f"1\tcase_1\tchr11\tsnapshots/chr11/case_1.png\t{snapshot_sha}\tSNAPSHOT_READY\n",
@@ -396,3 +399,23 @@ def test_reconcile_refuses_active_controller_and_missing_terminal(tmp_path, monk
     (output / "results/cases/case_1/terminal_bundle.json").unlink()
     with pytest.raises(ValueError, match="terminal bundle"):
         project_launcher.reconcile_project_output(output)
+
+
+@pytest.mark.parametrize("mutation", ["same_size", "appended_byte"])
+def test_postflight_rejects_case_file_drift_even_when_identity_is_unchanged(tmp_path, monkeypatch, mutation):
+    output = tmp_path / "output"
+    _completed_output(output, eligible=True)
+    case = output / "results/cases/case_1"
+    path = case / "case_result.json"
+    document = json.loads(path.read_text())
+    document["note"] = "before"
+    path.write_text(json.dumps(document))
+    _seal_case_fixture(case)
+    monkeypatch.setattr(project_launcher, "validate_v3_terminal_bundle_document", lambda *a: None)
+    project_launcher.validate_project_postflight(output)
+    if mutation == "same_size":
+        path.write_text(path.read_text().replace("before", "after!"))
+    else:
+        path.write_text(path.read_text() + " ")
+    with pytest.raises(ValueError, match="checksum/size differs"):
+        project_launcher.validate_project_postflight(output)

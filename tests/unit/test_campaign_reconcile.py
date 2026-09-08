@@ -9,6 +9,14 @@ from ssqtl_igv.utils import sha256_file, write_tsv
 from test_campaign_v3 import _master_tasks, _prepared_campaign
 
 
+def _seal_case_fixture(path):
+    result = json.loads(path.read_text())
+    (path.parent / "terminal_bundle.json").write_text(json.dumps({
+        "task_id": result["task_id"], "status": "SUCCEEDED" if result["eligible"] else "DOMAIN_FAILED",
+        "case_result_sha256": sha256_file(path), "case_result_size": path.stat().st_size,
+    }))
+
+
 def _completed_pilot(root, binding):
     contract = root / ".igv-pipeline/contract"
     contract.mkdir(parents=True)
@@ -28,7 +36,7 @@ def _completed_pilot(root, binding):
         result = {key: task[key] for key in ("task_id", "run_id", "generation_id", "manifest_order", "input_fingerprint")}
         result.update(eligible=True, artifacts={"review_image": {"sha256": sha256_file(path)}})
         (case / "case_result.json").write_text(json.dumps(result))
-        (case / "terminal_bundle.json").write_text(json.dumps({"task_id": tid, "status": "SUCCEEDED"}))
+        _seal_case_fixture(case / "case_result.json")
         trace.append(f"{i}\taa\t-\tPROJECT_RUN:RUN_PORTABLE_CASE ({tid})\tCOMPLETED\t0")
     write_tsv(root / "snapshots.tsv", list(rows[0]), rows)
     write_tsv(root / "failed_cases.tsv", ["manifest_order", "task_id", "chromosome", "failure_code", "message", "input_fingerprint"], [])
@@ -106,6 +114,7 @@ def test_collection_updates_only_a_verified_failed_only_replacement(tmp_path, mo
     result = json.loads(case.read_text())
     result["eligible"] = False
     case.write_text(json.dumps(result))
+    _seal_case_fixture(case)
     output = tmp_path / "collection"
     first = campaign_reconcile.reconcile_campaign(campaign, runs, output)
     assert first["ready_case_count"] == 99 and first["failed_case_count"] == 1
@@ -115,6 +124,7 @@ def test_collection_updates_only_a_verified_failed_only_replacement(tmp_path, mo
     write_tsv(source / "failed_cases.tsv", list(failures[0]), [])
     result["eligible"] = True
     case.write_text(json.dumps(result))
+    _seal_case_fixture(case)
     refused = campaign_reconcile.reconcile_campaign(campaign, runs, output)
     assert refused["ready_case_count"] == 99
     assert "rerun state" in refused["blocked_batches"][0]["reason"]
