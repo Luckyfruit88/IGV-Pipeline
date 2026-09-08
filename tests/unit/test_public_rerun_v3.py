@@ -381,8 +381,12 @@ def test_failed_task_can_transition_to_ready_atomically_and_idempotently(
     )
 
     assert result["status"] == "PUBLISHED"
-    assert result["commit_mode"] == "LOCKED_POSIX_RENAME_NFS_COMPAT"
+    assert result["commit_mode"] == "IMMUTABLE_OBJECTS_ATOMIC_CURRENT"
     assert result["recovered_case_count"] == 1
+    from ssqtl_igv.public_rerun_v3 import validate_projected_rerun_replacements
+    validate_projected_rerun_replacements(product, {"case_1": task["input_fingerprint"]})
+    with pytest.raises(ValueError, match="canonical case"):
+        validate_projected_rerun_replacements(product, {"case_1": "f" * 64})
     assert replay["status"] == "IDEMPOTENT"
     assert replay["remaining_failed_case_count"] == 0
     snapshot_row = (product / "snapshots.tsv").read_text(encoding="utf-8")

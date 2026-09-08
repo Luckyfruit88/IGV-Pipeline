@@ -11,6 +11,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
 from .contracts import (
@@ -749,7 +750,60 @@ def _validate_batch_request_document(
     return value
 
 
-def load_and_validate_batch_request(batch_request: str | Path) -> dict[str, Any]:
+@dataclass(frozen=True)
+class VerifiedCampaignMaster:
+    root: Path
+    contract_sha256: str
+    master_sha256: str
+    task_set_sha256: str
+    file_stat: tuple[int, int, int, int]
+    by_id: Mapping[str, Mapping[str, Any]]
+
+    def assert_unchanged(self, *, verify_digest: bool = False) -> None:
+        path = self.root / "contract/master_tasks.jsonl"
+        observed = path.stat()
+        if (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns) != self.file_stat:
+            raise ValueError("campaign master changed during reconciliation")
+        if sha256_file(_contract_path(self.root)) != self.contract_sha256:
+            raise ValueError("campaign contract changed during reconciliation")
+        if verify_digest and sha256_file(path) != self.master_sha256:
+            raise ValueError("campaign master checksum changed during reconciliation")
+
+
+def read_campaign_master_index(campaign_dir: str | Path) -> VerifiedCampaignMaster:
+    """Verify the large master once and retain only its task identity index."""
+    root = Path(campaign_dir).resolve(strict=True)
+    contract_path = _contract_path(root)
+    contract = _validate_campaign_contract(_json_object(contract_path, label="campaign contract"))
+    path = root / contract["master_tasks_relative_path"]
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("campaign master must be a regular file")
+    before = path.stat()
+    digest = hashlib.sha256()
+    index = {}
+    with path.open("rb") as stream:
+        for line in stream:
+            digest.update(line)
+            if not line.strip():
+                continue
+            task = json.loads(line)
+            tid = str(task["task_id"])
+            if tid in index:
+                raise ValueError("campaign master contains duplicate task IDs")
+            index[tid] = {key: task[key] for key in ("task_id", "manifest_order", "input_fingerprint")}
+    if digest.hexdigest() != contract["master_tasks_sha256"] or len(index) != int(contract["master_task_count"]):
+        raise ValueError("campaign master checksum or count differs")
+    if task_set_fingerprint(list(index.values())) != contract["master_task_set_sha256"]:
+        raise ValueError("campaign master task-set checksum differs")
+    result = VerifiedCampaignMaster(root, sha256_file(contract_path), digest.hexdigest(),
+        contract["master_task_set_sha256"], (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns),
+        MappingProxyType({key: MappingProxyType(value) for key, value in index.items()}))
+    result.assert_unchanged()
+    return result
+
+
+def load_and_validate_batch_request(batch_request: str | Path, *,
+                                    master_index: VerifiedCampaignMaster | None = None) -> dict[str, Any]:
     """Return the exact request-bound canonical subset for Nextflow admission."""
 
     request_path = Path(batch_request).expanduser()
@@ -796,16 +850,20 @@ def load_and_validate_batch_request(batch_request: str | Path) -> dict[str, Any]
             raise ValueError("batch-request canonical task identity differs from source mapping")
     if task_set_fingerprint(tasks) != request["task_set_sha256"]:
         raise ValueError("batch-request canonical task-set checksum differs")
-    master_path = root / str(contract["master_tasks_relative_path"])
-    master_bytes = read_regular_file_bytes(
-        master_path,
-        expected_sha256=contract["master_tasks_sha256"],
-        label="campaign master canonical tasks",
-    )
-    master = _jsonl_objects(master_bytes, label="campaign master canonical tasks")
-    master_by_id = {str(task["task_id"]): task for task in master}
-    if task_set_fingerprint(master) != contract["master_task_set_sha256"]:
-        raise ValueError("campaign master task set changed")
+    if master_index is not None:
+        if (master_index.root != root.resolve() or master_index.master_sha256 != contract["master_tasks_sha256"]
+                or master_index.task_set_sha256 != contract["master_task_set_sha256"]):
+            raise ValueError("cached master does not bind this campaign")
+        master_index.assert_unchanged()
+        master_by_id = master_index.by_id
+    else:
+        master_path = root / str(contract["master_tasks_relative_path"])
+        master_bytes = read_regular_file_bytes(master_path, expected_sha256=contract["master_tasks_sha256"],
+                                               label="campaign master canonical tasks")
+        master = _jsonl_objects(master_bytes, label="campaign master canonical tasks")
+        master_by_id = {str(task["task_id"]): task for task in master}
+        if task_set_fingerprint(master) != contract["master_task_set_sha256"]:
+            raise ValueError("campaign master task set changed")
     for source in source_map:
         master_task = master_by_id.get(str(source["task_id"]))
         if master_task is None or (

@@ -8,6 +8,24 @@ import pytest
 from ssqtl_igv import v3_cli
 
 
+def test_finished_batch_uses_the_same_campaign_reconciler(tmp_path, monkeypatch):
+    from ssqtl_igv import campaign_reconcile
+    request = tmp_path / "campaign/batches/batch-0002/batch-request.json"
+    request.parent.mkdir(parents=True)
+    request.write_text("{}")
+    calls = []
+    monkeypatch.setattr(v3_cli, "_embedded_runtime_manifest", lambda: tmp_path / "runtime.json")
+    monkeypatch.setattr(v3_cli, "run_project_workflow", lambda **kwargs: ({"status": "SNAPSHOTS_READY", "exit_code": 0}, 0))
+    monkeypatch.setattr(campaign_reconcile, "reconcile_campaign", lambda *args: calls.append(args) or {"status": "INCOMPLETE", "exit_code": 1})
+    args = v3_cli._parser().parse_args(["campaign", "run-batch", "--batch-request", str(request),
+        "--output", str(tmp_path / "runs/batch-0002"), "--campaign-output", str(tmp_path / "collection"),
+        "--campaign-runs", str(tmp_path / "runs")])
+    result, code = v3_cli._run_campaign_batch(args)
+    assert code == 0  # Other batches being pending does not fail this completed batch.
+    assert result["campaign_reconciliation"]["status"] == "INCOMPLETE"
+    assert calls[0][0] == tmp_path / "campaign"
+
+
 def _ssqtl_project(tmp_path: Path) -> dict:
     return {
         "adapter": "ssqtl",

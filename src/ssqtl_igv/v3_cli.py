@@ -20,7 +20,7 @@ from .orchestrator_v3 import (
     run_portable_ssqtl_normalization,
 )
 from .probes_v3 import collect_doctor_report
-from .project_launcher import run_project_workflow, validate_project_postflight
+from .project_launcher import reconcile_project_output, run_project_workflow, validate_project_postflight
 from .project_v3 import load_project_config
 from .public_rerun_v3 import (
     build_failed_rerun_plan,
@@ -72,6 +72,15 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--max-parallel", default="auto", metavar="auto|N")
     run.add_argument("--max-cases-per-shard", type=int, default=256)
     _add_resource_options(run)
+
+    reconcile = subparsers.add_parser(
+        "reconcile", help="rebuild run status from retained evidence without rendering"
+    )
+    reconcile.add_argument("--output", default="/output")
+
+    export_snapshots = subparsers.add_parser("export-snapshots", help="export a pinned snapshot view as ordinary files")
+    export_snapshots.add_argument("--output", required=True)
+    export_snapshots.add_argument("--destination", required=True)
 
     rerun_failed = subparsers.add_parser(
         "rerun-failed",
@@ -152,6 +161,8 @@ def _parser() -> argparse.ArgumentParser:
         "--max-cases-per-shard", type=int, default=256
     )
     _add_resource_options(campaign_run_batch)
+    campaign_run_batch.add_argument("--campaign-output", help="reconcile the campaign into this separate collection after the batch")
+    campaign_run_batch.add_argument("--campaign-runs", help="parent directory containing the campaign batch workspaces")
 
     campaign_status = campaign_commands.add_parser(
         "status", help="reduce live authoritative sources without writing campaign state"
@@ -162,6 +173,11 @@ def _parser() -> argparse.ArgumentParser:
     campaign_status.add_argument("--raw-qacct")
     campaign_status.add_argument("--accounting-attestation")
     campaign_status.add_argument("--publication-completion")
+
+    campaign_reconcile = campaign_commands.add_parser("reconcile", help="accept completed batches and reconcile the full frozen task set without rendering")
+    campaign_reconcile.add_argument("--campaign-dir", required=True)
+    campaign_reconcile.add_argument("--runs-dir", required=True)
+    campaign_reconcile.add_argument("--output", required=True)
 
     campaign_next = campaign_commands.add_parser(
         "next", help="authorize the next <=256-case request after verified publication"
@@ -419,12 +435,16 @@ def _prepare_campaign_master(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _run_campaign_batch(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    collection = getattr(args, "campaign_output", None)
+    runs = getattr(args, "campaign_runs", None)
+    if bool(collection) != bool(runs):
+        raise ValueError("--campaign-output and --campaign-runs must be provided together")
     output = reject_symlink_path_components(
         args.output, label="output directory"
     ).resolve(strict=False)
     if args.resume:
         _resume_identity(output)
-    return run_project_workflow(
+    result, code = run_project_workflow(
         project=None,
         batch_request=args.batch_request,
         output=output,
@@ -440,6 +460,11 @@ def _run_campaign_batch(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         normalization_memory=args.normalization_memory,
         normalization_timeout=args.normalization_timeout,
     )
+    if collection:
+        from .campaign_reconcile import reconcile_campaign
+        campaign = Path(args.batch_request).resolve(strict=True).parents[2]
+        result["campaign_reconciliation"] = reconcile_campaign(campaign, runs, collection)
+    return result, code
 
 
 def _publish(args: argparse.Namespace) -> dict[str, Any]:
@@ -494,6 +519,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "init":
             result, code = init_templates(args.output, adapter=args.adapter), 0
+        elif args.command == "reconcile":
+            result = reconcile_project_output(args.output)
+            code = int(result["exit_code"])
+        elif args.command == "export-snapshots":
+            from .snapshot_store import export_snapshot_outputs
+            result = export_snapshot_outputs(args.output, args.destination)
+            code = 0
         elif args.command == "doctor":
             project = load_project_config(args.project)
             output = Path(args.output).expanduser().resolve(strict=False)
@@ -554,6 +586,10 @@ def main(argv: list[str] | None = None) -> int:
                     publication_completion=args.publication_completion,
                 )
                 code = 2 if result.get("status") == "INCONSISTENT" else 0
+            elif args.campaign_command == "reconcile":
+                from .campaign_reconcile import reconcile_campaign
+                result = reconcile_campaign(args.campaign_dir, args.runs_dir, args.output)
+                code = int(result["exit_code"])
             elif args.campaign_command == "next":
                 result = create_next_batch(
                     args.campaign_dir,

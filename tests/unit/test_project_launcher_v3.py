@@ -340,3 +340,59 @@ def test_launcher_invokes_nextflow_once_then_runs_postflight(
     assert (result["status"], code) == ("CASE_FAILURES", 2)
     assert len(calls) == 1
     assert calls[0].count("run") == 1
+
+
+@pytest.mark.parametrize("old_summary", [None, "{broken", '{"status":"INFRASTRUCTURE_FATAL","exit_code":1}', '{"expected_case_count":999}'])
+def test_reconcile_recovers_projection_without_running_workers(tmp_path, monkeypatch, old_summary):
+    output = tmp_path / "output"
+    _completed_output(output, eligible=True)
+    path = output / "run_summary.json"
+    if old_summary is None:
+        path.unlink()
+    else:
+        path.write_text(old_summary)
+    monkeypatch.setattr(project_launcher, "validate_v3_terminal_bundle_document", lambda *a: None)
+    monkeypatch.setattr(project_launcher.subprocess, "run", lambda *a, **k: pytest.fail("must not launch a worker"))
+    result = project_launcher.reconcile_project_output(output)
+    assert result["status"] == "SNAPSHOTS_READY"
+    assert result["expected_case_count"] == result["observed_case_count"] == 1
+    first = path.read_bytes()
+    project_launcher.reconcile_project_output(output)
+    assert path.read_bytes() == first
+    if old_summary is not None:
+        archived = list((output / "reports/projection-history").glob("*.json"))
+        assert any(p.read_text() == old_summary for p in archived)
+
+
+def test_failed_attempt_cannot_poison_completed_product(tmp_path, monkeypatch):
+    project, runtime = _inputs(tmp_path)
+    output = tmp_path / "output"
+    _completed_output(output, eligible=True)
+    before = (output / "run_summary.json").read_bytes()
+    monkeypatch.setattr(project_launcher, "_nextflow_executable", lambda _: "nextflow")
+    monkeypatch.setattr(project_launcher, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(project_launcher, "validate_v3_terminal_bundle_document", lambda *a: None)
+    exit_status = [137]
+    monkeypatch.setattr(project_launcher.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=exit_status[0]))
+    args = dict(project=project, batch_request=None, output=output, work=None,
+                resume=True, max_parallel="auto", max_cases_per_shard=256, runtime_manifest=runtime)
+    failed, code = project_launcher.run_project_workflow(**args)
+    assert code == 1 and failed["nextflow_exit_code"] == 137
+    assert (output / "run_summary.json").read_bytes() == before
+    exit_status[0] = 0
+    recovered, code = project_launcher.run_project_workflow(**args)
+    assert code == 0 and recovered["status"] == "SNAPSHOTS_READY"
+    receipts = [json.loads(p.read_text()) for p in (output / "reports/attempts").glob("*/terminal.json")]
+    assert sorted(r["product_exit_code"] for r in receipts) == [0, 1]
+
+
+def test_reconcile_refuses_active_controller_and_missing_terminal(tmp_path, monkeypatch):
+    output = tmp_path / "output"
+    _completed_output(output, eligible=True)
+    monkeypatch.setattr(project_launcher, "validate_v3_terminal_bundle_document", lambda *a: None)
+    with project_launcher.exclusive_run_output(output):
+        with pytest.raises(RuntimeError, match="another controller"):
+            project_launcher.reconcile_project_output(output)
+    (output / "results/cases/case_1/terminal_bundle.json").unlink()
+    with pytest.raises(ValueError, match="terminal bundle"):
+        project_launcher.reconcile_project_output(output)

@@ -409,8 +409,13 @@ def resolve_execution_policy(
         effective_parallel = explicit
 
     attempts: list[dict[str, Any]] = []
+    # The retry ladder is bounded by this allocation, not by host RAM. With
+    # unknown RAM, retain the admitted base footprint instead of escalating.
+    retry_ceiling = (
+        (usable_memory // MIB) * MIB if usable_memory is not None else render_memory
+    )
     for attempt, factor in enumerate(RENDER_ATTEMPT_FACTORS, 1):
-        memory_bytes = render_memory * factor
+        memory_bytes = min(render_memory * factor, retry_ceiling)
         timeout_seconds = render_timeout * factor
         heap_bytes, heap_argument = _heap_argument(memory_bytes)
         attempts.append(
@@ -474,6 +479,11 @@ def validate_execution_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
     if [row["attempt"] for row in attempts] != [1, 2, 3]:
         raise ValueError("execution policy attempts must be exactly 1, 2, 3")
     for row in attempts:
+        usable = policy["resource_envelope"]["usable_memory_bytes"]
+        if usable is not None and row["memory_bytes"] > usable:
+            raise ValueError("render attempt exceeds the allocation memory budget")
+        if row["cpus"] > policy["resource_envelope"]["cpu_slots"]:
+            raise ValueError("render attempt exceeds the allocation CPU budget")
         heap_bytes, heap_argument = _heap_argument(int(row["memory_bytes"]))
         if (
             row["igv_heap_bytes"] != heap_bytes

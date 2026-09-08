@@ -1,5 +1,5 @@
 include { RESOLVE_PROJECT_ENTRY } from '../modules/local/resolve_project_entry'
-include { RESOLVE_EXECUTION_POLICY } from '../modules/local/resolve_execution_policy'
+include { RESOLVE_EXECUTION_POLICY; executionPolicyForCache } from '../modules/local/resolve_execution_policy'
 include { VALIDATE_RUNTIME_IDENTITY } from '../modules/local/validate_runtime_identity'
 include { NORMALIZE_SSQTL_V3 } from '../modules/local/normalize_ssqtl_v3'
 include { ADMIT_PROJECT_TASKS } from '../modules/local/admit_project_tasks'
@@ -69,7 +69,7 @@ workflow PROJECT_RUN {
         params.normalization_timeout,
     )
     executionPolicy = RESOLVE_EXECUTION_POLICY.out.policy
-    executionPolicyDoc = executionPolicy.map { policyPath -> policyPath.text }
+    executionPolicyDoc = executionPolicy.map { policyPath -> executionPolicyForCache(policyPath.text) }
 
     RESOLVE_PROJECT_ENTRY(
         entryHelper,

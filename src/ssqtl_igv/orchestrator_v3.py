@@ -447,7 +447,13 @@ def _write_direct_output_tables(
                 "status": "SNAPSHOT_READY" if result["eligible"] else "CASE_FAILED",
             }
         )
-        for failure in result["failures"]:
+        recorded_failures = result["failures"]
+        if not result["eligible"] and not recorded_failures:
+            recorded_failures = [{
+                "code": "DEBUG_ONLY_EVIDENCE" if result.get("debug_only") else "CASE_NOT_ELIGIBLE",
+                "message": "Rendered evidence is not eligible for a product snapshot",
+            }]
+        for failure in recorded_failures:
             failure_rows.append(
                 {
                     "manifest_order": result["manifest_order"],

@@ -40,7 +40,7 @@ license-files = ["LICENSE"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-ssqtl_igv = ["resources/*.R", "resources/*.yaml"]
+ssqtl_igv = ["resources/*.R", "resources/*.yaml", "resources/*.java"]
 
 [tool.setuptools.data-files]
 "share/igv-snapshot-workflow/schema" = ["schema/*.json"]

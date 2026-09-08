@@ -76,6 +76,14 @@ COPY schema ./schema
 COPY scripts ./scripts
 COPY src ./src
 COPY workflows ./workflows
+# Build-only compiler is removed in this same layer; the runtime needs a JRE.
+RUN /opt/igv-helper/bin/python -c 'import urllib.request; urllib.request.urlretrieve("https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.8%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.8_9.tar.gz", "/tmp/probe-jdk.tar.gz")' \
+    && printf '%s  %s\n' f2dc5418092c43003db8f9005c4a286e1c0104fea96ccdd49e8ebd037cac9219 /tmp/probe-jdk.tar.gz | sha256sum --check --strict \
+    && mkdir -p /tmp/probe-jdk /opt/igv-probes \
+    && tar -xzf /tmp/probe-jdk.tar.gz --strip-components=1 -C /tmp/probe-jdk \
+    && /tmp/probe-jdk/bin/javac --release 11 -d /opt/igv-probes src/ssqtl_igv/resources/LocusClipboardProbe.java \
+    && (cd /opt/igv-probes && sha256sum *.class > SHA256SUMS) \
+    && rm -rf /tmp/probe-jdk /tmp/probe-jdk.tar.gz
 RUN /opt/igv-helper/bin/python -m pip install \
         --no-deps \
         --no-build-isolation \
