@@ -10,7 +10,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from .campaign_v3 import materialize_batch_tasks
 from .contracts import validate_v3_task_document
 from .identity import task_set_fingerprint
 from .orchestrator_v3 import (
@@ -302,6 +301,8 @@ def resolve_project_entry(
                     staging / "batch-request.json"
                 )
         elif batch_request is not None:
+            from .campaign_v3 import materialize_batch_tasks
+
             tasks, binding_value = materialize_batch_tasks(batch_request)
             binding = dict(binding_value)
             request = dict(binding["request"])

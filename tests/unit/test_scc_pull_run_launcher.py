@@ -228,7 +228,7 @@ def test_batch_request_mode_adds_read_only_campaign_bind_and_keeps_one_job(
     assert f" --bind {campaign}:/campaign:ro" in command
     assert f" --bind {output}:/output:rw" in command
     assert (
-        f" {sif} campaign run-batch"
+        f" {sif} /opt/igv-helper/bin/python -m ssqtl_igv.benchmark_cli campaign run-batch"
         " --batch-request /campaign/batches/pilot-001/batch-request.json"
         " --output /output --max-parallel auto --resume"
     ) in command

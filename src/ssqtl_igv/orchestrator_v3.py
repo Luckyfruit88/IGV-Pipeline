@@ -20,7 +20,6 @@ from .artifact_admission_v3 import (
     assert_not_debug_metadata,
     assert_production_artifact_tree,
 )
-from .campaign_v3 import load_and_validate_batch_request
 from .contracts import (
     validate_v3_task_document,
     validate_v3_case_result_document,
@@ -35,7 +34,6 @@ from .controller_runtime_v3 import (
 )
 from .docker_worker_v3 import docker_worker_identity
 from .product_paths_v3 import cases_root
-from .review_package_v3 import build_review_package_v3
 from .rerun_v3 import freeze_case_failure_rerun, prepare_rerun_task_set
 from .runtime_identity import validate_runtime_manifest
 from .sharding_v3 import create_bounded_shards
@@ -49,6 +47,20 @@ from .utils import (
     write_tsv,
 )
 from .v3_manifest import _relative_path, normalize_generic_manifest
+
+
+def load_and_validate_batch_request(*args, **kwargs):
+    """Load the optional research layer only when explicitly requested."""
+    from .campaign_v3 import load_and_validate_batch_request as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def build_review_package_v3(*args, **kwargs):
+    """Load the optional research layer only when explicitly requested."""
+    from .review_package_v3 import build_review_package_v3 as implementation
+
+    return implementation(*args, **kwargs)
 
 
 _SGE_SITE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

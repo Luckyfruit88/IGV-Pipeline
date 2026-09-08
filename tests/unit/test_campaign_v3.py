@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ssqtl_igv import campaign_v3
-from ssqtl_igv import v3_cli
+from ssqtl_igv import benchmark_cli as v3_cli
 from ssqtl_igv.campaign_v3 import (
     CampaignLockError,
     EXPECTED_MASTER_TASK_COUNT,

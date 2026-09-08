@@ -864,20 +864,20 @@ taskid {task}
         self.assertLess(readme.index("### Quick Start"), readme.index("### 快速开始"))
         self.assertEqual(
             re.findall(
-                r"^### (Quick Start|Production Usage|SCC Pilot Qualification|Developer Architecture)$",
+                r"^### (Quick Start|Production Usage|Optional BU SCC deployment|Developer Architecture)$",
                 readme,
                 re.MULTILINE,
             ),
             [
                 "Quick Start",
                 "Production Usage",
-                "SCC Pilot Qualification",
+                "Optional BU SCC deployment",
                 "Developer Architecture",
             ],
         )
         self.assertEqual(
-            re.findall(r"^### (快速开始|生产使用|SCC Pilot 验证|开发者架构)$", readme, re.MULTILINE),
-            ["快速开始", "生产使用", "SCC Pilot 验证", "开发者架构"],
+            re.findall(r"^### (快速开始|生产使用|可选的 BU SCC 部署|开发者架构)$", readme, re.MULTILINE),
+            ["快速开始", "生产使用", "可选的 BU SCC 部署", "开发者架构"],
         )
         for token in (
             "schema_version",

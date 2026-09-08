@@ -57,11 +57,9 @@ if [[ "$1" == "nextflow" ]]; then
 fi
 
 case "$1" in
-    doctor|run|rerun-failed|review|publish|campaign)
+    doctor|run|rerun-failed|review|publish|smoke-test)
         prepare_writable_runtime
-        if [[ "$1" == "run" || "$1" == "rerun-failed" || \
-              ( "$1" == "campaign" && \
-                ( "${2:-}" == "prepare-master" || "${2:-}" == "run-batch" ) ) ]]; then
+        if [[ "$1" == "run" || "$1" == "rerun-failed" || "$1" == "smoke-test" ]]; then
             /usr/local/bin/runtime-self-test >/dev/null
         fi
         exec "${cli}" "$@"

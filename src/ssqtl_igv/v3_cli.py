@@ -3,22 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from .campaign_v3 import (
-    create_next_batch,
-    prepare_campaign,
-    reduce_campaign_status,
-)
-from .migration_v3 import import_v2_read_only
-from .orchestrator_v3 import (
-    resolve_max_parallel,
-    run_portable_ssqtl_normalization,
-)
 from .probes_v3 import collect_doctor_report
 from .project_launcher import reconcile_project_output, run_project_workflow, validate_project_postflight
 from .project_v3 import load_project_config
@@ -28,9 +17,6 @@ from .public_rerun_v3 import (
     reconcile_failed_rerun,
     validate_live_project_binding,
 )
-from .publication import build_publication_promotion_receipt, promote_publication
-from .publication_v3 import build_publication_staging
-from .review_server import finalize_review, serve_review
 from .runtime_identity import RUNTIME_MANIFEST_IMAGE_PATH
 from .utils import reject_symlink_path_components, sha256_file
 from .v3_manifest import init_templates
@@ -57,6 +43,9 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--adapter", choices=("generic", "ssqtl"), default="generic")
     init.add_argument("--output", default="igv-snapshot-project")
 
+    smoke = subparsers.add_parser("smoke-test", help="optionally run a tiny real IGV example; no pilot required")
+    smoke.add_argument("--output", default="/output/smoke-test")
+
     doctor = subparsers.add_parser("doctor", help="validate the project and embedded runtime")
     doctor.add_argument("--project", default="/project/project.yaml")
     doctor.add_argument("--output", default="/output")
@@ -70,7 +59,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--work")
     run.add_argument("--resume", action="store_true")
     run.add_argument("--max-parallel", default="auto", metavar="auto|N")
-    run.add_argument("--max-cases-per-shard", type=int, default=256)
+    run.add_argument("--max-cases-per-shard", type=int, default=256, help=argparse.SUPPRESS)
     _add_resource_options(run)
 
     reconcile = subparsers.add_parser(
@@ -91,7 +80,7 @@ def _parser() -> argparse.ArgumentParser:
     rerun_failed.add_argument("--work")
     rerun_failed.add_argument("--resume", action="store_true")
     rerun_failed.add_argument("--max-parallel", default="auto", metavar="auto|N")
-    rerun_failed.add_argument("--max-cases-per-shard", type=int, default=256)
+    rerun_failed.add_argument("--max-cases-per-shard", type=int, default=256, help=argparse.SUPPRESS)
     _add_resource_options(rerun_failed)
 
     review = subparsers.add_parser(
@@ -117,74 +106,6 @@ def _parser() -> argparse.ArgumentParser:
     import_v2.add_argument("--source", required=True)
     import_v2.add_argument("--output", required=True)
 
-    campaign = subparsers.add_parser(
-        "campaign", help="manage optional scientific campaign authorization"
-    )
-    campaign_commands = campaign.add_subparsers(dest="campaign_command", required=True)
-    campaign_prepare = campaign_commands.add_parser(
-        "prepare", help="freeze the master task set and deterministic 100-case QA pilot"
-    )
-    campaign_prepare.add_argument("--campaign-dir", required=True)
-    campaign_prepare.add_argument("--campaign-id", required=True)
-    campaign_prepare.add_argument("--master-tasks", required=True)
-    campaign_prepare.add_argument("--actor", default=os.environ.get("USER", "operator"))
-
-    campaign_prepare_master = campaign_commands.add_parser(
-        "prepare-master",
-        help="normalize one ssQTL project and freeze its master/pilot task sets",
-    )
-    campaign_prepare_master.add_argument(
-        "--project", default="/project/project.yaml"
-    )
-    campaign_prepare_master.add_argument("--campaign-dir", required=True)
-    campaign_prepare_master.add_argument("--campaign-id", required=True)
-    campaign_prepare_master.add_argument("--work")
-    campaign_prepare_master.add_argument(
-        "--max-parallel", default="auto", metavar="auto|N"
-    )
-    campaign_prepare_master.add_argument(
-        "--actor", default=os.environ.get("USER", "operator")
-    )
-
-    campaign_run_batch = campaign_commands.add_parser(
-        "run-batch",
-        help="execute exactly one validated immutable campaign batch-request",
-    )
-    campaign_run_batch.add_argument("--batch-request", required=True)
-    campaign_run_batch.add_argument("--output", default="/output")
-    campaign_run_batch.add_argument("--work")
-    campaign_run_batch.add_argument("--resume", action="store_true")
-    campaign_run_batch.add_argument(
-        "--max-parallel", default="auto", metavar="auto|N"
-    )
-    campaign_run_batch.add_argument(
-        "--max-cases-per-shard", type=int, default=256
-    )
-    _add_resource_options(campaign_run_batch)
-    campaign_run_batch.add_argument("--campaign-output", help="reconcile the campaign into this separate collection after the batch")
-    campaign_run_batch.add_argument("--campaign-runs", help="parent directory containing the campaign batch workspaces")
-
-    campaign_status = campaign_commands.add_parser(
-        "status", help="reduce live authoritative sources without writing campaign state"
-    )
-    campaign_status.add_argument("--campaign-dir", required=True)
-    campaign_status.add_argument("--batch-id")
-    campaign_status.add_argument("--nextflow-trace")
-    campaign_status.add_argument("--raw-qacct")
-    campaign_status.add_argument("--accounting-attestation")
-    campaign_status.add_argument("--publication-completion")
-
-    campaign_reconcile = campaign_commands.add_parser("reconcile", help="accept completed batches and reconcile the full frozen task set without rendering")
-    campaign_reconcile.add_argument("--campaign-dir", required=True)
-    campaign_reconcile.add_argument("--runs-dir", required=True)
-    campaign_reconcile.add_argument("--output", required=True)
-
-    campaign_next = campaign_commands.add_parser(
-        "next", help="authorize the next <=256-case request after verified publication"
-    )
-    campaign_next.add_argument("--campaign-dir", required=True)
-    campaign_next.add_argument("--publication-completion", required=True)
-    campaign_next.add_argument("--actor", default=os.environ.get("USER", "operator"))
     return parser
 
 
@@ -376,98 +297,10 @@ def _rerun_failed(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         )
 
 
-def _prepare_campaign_master(args: argparse.Namespace) -> dict[str, Any]:
-    project = load_project_config(args.project)
-    if project["adapter"] != "ssqtl":
-        raise ValueError("campaign prepare-master requires an ssQTL project")
-    campaign_dir = reject_symlink_path_components(
-        args.campaign_dir, label="campaign directory"
-    ).resolve(strict=False)
-    work = (
-        reject_symlink_path_components(args.work, label="work directory").resolve(
-            strict=False
-        )
-        if args.work
-        else None
-    )
-    if work is not None and (
-        work == campaign_dir
-        or campaign_dir in work.parents
-        or work in campaign_dir.parents
-    ):
-        raise ValueError(
-            "campaign prepare-master work and campaign directories must not overlap"
-        )
-    max_parallel = resolve_max_parallel(args.max_parallel)
-    inputs = project["inputs"]
-    normalization = run_portable_ssqtl_normalization(
-        run_dir=campaign_dir,
-        run_id=args.campaign_id,
-        generation_id="master",
-        profile="standalone",
-        associations=inputs["associations"]["declared_path"],
-        rds_dir=inputs["rds_dir"]["declared_path"],
-        bam_lookup=inputs["bam_lookup"]["declared_path"],
-        violin_dir=inputs["violin_dir"]["declared_path"],
-        input_root=project["project_root"],
-        reference=project["reference"]["source_path"],
-        adapter_config=(inputs.get("config") or {}).get("declared_path"),
-        runtime_identity_path=_embedded_runtime_manifest(),
-        nextflow=None,
-        work_dir=work,
-        max_parallel=max_parallel,
-    )
-    try:
-        result = prepare_campaign(
-            Path(normalization["bundle"]) / "tasks.jsonl",
-            campaign_dir,
-            campaign_id=args.campaign_id,
-            actor=args.actor,
-        )
-    finally:
-        shutil.rmtree(normalization["temporary_root"], ignore_errors=True)
-    return {
-        **result,
-        "runtime_fingerprint_sha256": normalization[
-            "runtime_fingerprint_sha256"
-        ],
-    }
-
-
-def _run_campaign_batch(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    collection = getattr(args, "campaign_output", None)
-    runs = getattr(args, "campaign_runs", None)
-    if bool(collection) != bool(runs):
-        raise ValueError("--campaign-output and --campaign-runs must be provided together")
-    output = reject_symlink_path_components(
-        args.output, label="output directory"
-    ).resolve(strict=False)
-    if args.resume:
-        _resume_identity(output)
-    result, code = run_project_workflow(
-        project=None,
-        batch_request=args.batch_request,
-        output=output,
-        work=args.work,
-        resume=args.resume,
-        max_parallel=args.max_parallel,
-        max_cases_per_shard=args.max_cases_per_shard,
-        runtime_manifest=_embedded_runtime_manifest(),
-        igv_cpus=args.igv_cpus,
-        igv_memory=args.igv_memory,
-        igv_timeout=args.igv_timeout,
-        normalization_cpus=args.normalization_cpus,
-        normalization_memory=args.normalization_memory,
-        normalization_timeout=args.normalization_timeout,
-    )
-    if collection:
-        from .campaign_reconcile import reconcile_campaign
-        campaign = Path(args.batch_request).resolve(strict=True).parents[2]
-        result["campaign_reconciliation"] = reconcile_campaign(campaign, runs, collection)
-    return result, code
-
-
 def _publish(args: argparse.Namespace) -> dict[str, Any]:
+    from .publication import build_publication_promotion_receipt, promote_publication
+    from .publication_v3 import build_publication_staging
+
     output_value = Path(args.output).expanduser()
     if output_value.is_symlink() or not output_value.resolve(strict=True).is_dir():
         raise ValueError(f"output must be a regular non-symlink directory: {output_value}")
@@ -526,6 +359,11 @@ def main(argv: list[str] | None = None) -> int:
             from .snapshot_store import export_snapshot_outputs
             result = export_snapshot_outputs(args.output, args.destination)
             code = 0
+        elif args.command == "smoke-test":
+            from .smoke_test import run_smoke_test
+
+            result = run_smoke_test(args.output)
+            code = int(result["exit_code"])
         elif args.command == "doctor":
             project = load_project_config(args.project)
             output = Path(args.output).expanduser().resolve(strict=False)
@@ -546,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "rerun-failed":
             result, code = _rerun_failed(args)
         elif args.command == "review":
+            from .review_server import finalize_review, serve_review
+
             if args.finalize:
                 result = finalize_review(args.output)
             else:
@@ -561,44 +401,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "publish":
             result, code = _publish(args), 0
         elif args.command == "import-v2":
+            from .migration_v3 import import_v2_read_only
+
             result, code = import_v2_read_only(args.source, args.output), 0
-        elif args.command == "campaign":
-            if args.campaign_command == "prepare":
-                result = prepare_campaign(
-                    args.master_tasks,
-                    args.campaign_dir,
-                    campaign_id=args.campaign_id,
-                    actor=args.actor,
-                )
-                code = 0
-            elif args.campaign_command == "prepare-master":
-                result = _prepare_campaign_master(args)
-                code = 0
-            elif args.campaign_command == "run-batch":
-                result, code = _run_campaign_batch(args)
-            elif args.campaign_command == "status":
-                result = reduce_campaign_status(
-                    args.campaign_dir,
-                    batch_id=args.batch_id,
-                    nextflow_trace=args.nextflow_trace,
-                    raw_qacct=args.raw_qacct,
-                    accounting_attestation=args.accounting_attestation,
-                    publication_completion=args.publication_completion,
-                )
-                code = 2 if result.get("status") == "INCONSISTENT" else 0
-            elif args.campaign_command == "reconcile":
-                from .campaign_reconcile import reconcile_campaign
-                result = reconcile_campaign(args.campaign_dir, args.runs_dir, args.output)
-                code = int(result["exit_code"])
-            elif args.campaign_command == "next":
-                result = create_next_batch(
-                    args.campaign_dir,
-                    args.publication_completion,
-                    actor=args.actor,
-                )
-                code = 0
-            else:  # pragma: no cover - argparse owns completeness
-                raise AssertionError(args.campaign_command)
         else:  # pragma: no cover - argparse owns completeness
             raise AssertionError(args.command)
     except (

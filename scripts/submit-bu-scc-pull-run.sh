@@ -324,9 +324,12 @@ container_command=(
     --bind "${output_dir}:/output:rw"
 )
 if [[ -n "${batch_request_arg}" ]]; then
+    container_command[1]=exec
     container_command+=(
         --bind "${campaign_root}:/campaign:ro"
         "${sif_path}"
+        /opt/igv-helper/bin/python
+        -m ssqtl_igv.benchmark_cli
         campaign
         run-batch
         --batch-request "${container_batch_request}"

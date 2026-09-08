@@ -7,7 +7,7 @@ trace lineage; stale or missing summaries are archived and rebuilt.
 
 ```bash
 igv-snapshot reconcile --output /runs/batch-0002
-igv-snapshot campaign reconcile \
+python -m ssqtl_igv.benchmark_cli campaign reconcile \
   --campaign-dir /campaign --runs-dir /runs --output /collection
 ```
 
@@ -43,7 +43,7 @@ generation. Reconciliation does not change those evidence labels.
 A batch controller can call the same reconciler automatically after its run:
 
 ```bash
-igv-snapshot campaign run-batch \
+python -m ssqtl_igv.benchmark_cli campaign run-batch \
   --batch-request /campaign/batches/batch-0002/batch-request.json \
   --output /runs/batch-0002 \
   --campaign-runs /runs --campaign-output /collection

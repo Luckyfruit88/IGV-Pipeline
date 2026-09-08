@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ssqtl_igv import v3_cli
+from ssqtl_igv import benchmark_cli as v3_cli
 
 
 def test_finished_batch_uses_the_same_campaign_reconciler(tmp_path, monkeypatch):
@@ -212,7 +212,9 @@ def test_run_batch_rejects_unsafe_output_and_invalid_shard_size(
 
 
 def test_campaign_execution_options_do_not_change_public_run_options() -> None:
-    parser = v3_cli._parser()
+    from ssqtl_igv import v3_cli as product_cli
+
+    parser = product_cli._parser()
     top_level = next(
         action
         for action in parser._actions

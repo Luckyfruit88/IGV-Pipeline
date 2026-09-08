@@ -5,9 +5,9 @@ Desktop screenshots and mechanical QC. Nextflow provides execution, cache, and
 resume; the container provides IGV 2.16.2, Xvfb, fonts, OCR, image tools, and
 both required Java runtimes.
 
-> Release status: `v3.0.0` and its public GHCR image are published only after
-> the maintainer BU SCC 100-case QA run passes. The commands below define the
-> release interface; before that release, use a locally built image tag.
+> The published v3.0.0 remains available. Source changes on this refactor branch
+> are not in that image: build a local image to exercise them. No 100-case pilot
+> is required for installation, ordinary runs, or subsequent releases.
 
 ## English
 
@@ -180,7 +180,7 @@ igv-snapshot rerun-failed
 igv-snapshot review
 igv-snapshot publish
 igv-snapshot import-v2
-igv-snapshot campaign ...
+igv-snapshot smoke-test
 ```
 
 Inside the OCI/SIF, the entrypoint accepts the command after `igv-snapshot`
@@ -315,10 +315,10 @@ destination:
 igv-snapshot publish --output /output --destination /path/to/new-destination
 ```
 
-Campaign commands are an advanced scientific batching layer. They authorize
-selections and later batches but never copy Nextflow task state.
+Historical campaign commands are isolated in `python -m ssqtl_igv.benchmark_cli`.
+They are not required for ordinary runs; see [the archived protocol](benchmarks/legacy/README.md).
 
-### SCC Pilot Qualification
+### Optional BU SCC deployment
 
 #### BU SCC single-job execution
 
@@ -385,32 +385,12 @@ optional operator accounting for the outer job; it does not gate screenshot
 output. Distributed host-Nextflow/SGE execution is deferred from v3.0.0; its
 legacy launcher fails closed instead of invoking removed CLI options.
 
-#### Maintainer 100-case QA
+#### Optional installation check
 
-The first release requires one formal BU SCC 100-case pilot using the same SIF
-and single-node execution model. Selection spans the fixed chromosome × strand
-strata and task complexity vector `(track_count, track_input_bytes,
-overview_span_bp)`. The pilot checks exact 100-task Nextflow coverage, 100
-screenshots and QC records, no silent loss, and the outer SGE job accounting.
-
-The maintainer flow keeps execution and scientific state separate:
-
-```text
-campaign prepare-master  # Nextflow normalizes the 8,973-task master set
-campaign run-batch       # Nextflow executes only pilot-001
-```
-
-`prepare-master` writes the immutable campaign contract and deterministic
-100-task `batch-request`. The one-job helper accepts that request with
-`--batch-request /absolute/campaign/batches/pilot-001/batch-request.json`.
-The pilot SIF must be pulled from the immutable digest produced by the
-`pilot-candidate-oci` workflow. After the pilot passes, the release workflow
-promotes that same digest to `3.0.0`, `3.0`, and `latest` without rebuilding.
-
-This pilot is a maintainer release check. It is not a normal user command, does
-not add runtime parameters, and does not create a custom trust or key workflow.
-Apple Silicon through amd64 emulation is usable but not yet tested as an
-official platform; native ARM and Windows validation are deferred.
+Run `igv-snapshot smoke-test --output /output/smoke-test` inside the runtime to
+render two small synthetic BAM examples with the real IGV/Nextflow path. This
+is optional and does not authorize or gate later runs. `-stub-run` checks DAG
+wiring only, not actual rendering. See [testing and releases](docs/testing-and-releases.md).
 
 ### Developer Architecture
 
@@ -598,7 +578,7 @@ igv-snapshot rerun-failed
 igv-snapshot review
 igv-snapshot publish
 igv-snapshot import-v2
-igv-snapshot campaign ...
+igv-snapshot smoke-test
 ```
 
 OCI/SIF 的 entrypoint 可以直接接收 `igv-snapshot` 后面的命令，所以容器示例写作
@@ -720,7 +700,7 @@ igv-snapshot publish --output /output --destination /path/to/new-destination
 
 Campaign 命令只用于高级科学分批授权，不复制 Nextflow task state。
 
-### SCC Pilot 验证
+### 可选的 BU SCC 部署
 
 #### BU SCC 单 job 运行
 
@@ -782,30 +762,13 @@ apptainer run --cleanenv --containall --no-home --net --network none \
 accounting，不阻塞截图输出。分布式宿主 Nextflow/SGE 执行在 v3.0.0 中延期；
 旧 launcher 会明确 fail closed，不会调用已经删除的 CLI 参数。
 
-#### 维护者 100-case QA
+#### 可选的小型真实出图测试
 
-首次发布前，在 BU SCC 用同一个 SIF 和单节点执行模式完成正式 100-case pilot。
-任务选择覆盖固定 chromosome × strand strata，并使用复杂度向量
-`(track_count, track_input_bytes, overview_span_bp)`。检查内容包括 Nextflow 精确
-覆盖 100 个 task、100 份截图与 QC、零静默丢失，以及外层 SGE job accounting。
-
-维护者流程保持 execution state 与 scientific state 分离：
-
-```text
-campaign prepare-master  # 由 Nextflow 生成 8,973-task master set
-campaign run-batch       # Nextflow 只执行 pilot-001
-```
-
-`prepare-master` 冻结 campaign contract 和确定性的 100-task `batch-request`。
-单 job helper 通过
-`--batch-request /absolute/campaign/batches/pilot-001/batch-request.json`
-执行该批次。pilot SIF 必须从 `pilot-candidate-oci` workflow 产出的 immutable
-digest 转换；pilot 通过后，release workflow 只把同一个 digest 提升为
-`3.0.0`、`3.0` 和 `latest`，不重新构建。
-
-这是维护者 release check，不是普通用户命令，不增加 runtime 参数，也不创建
-自定义密钥或信任流程。Apple Silicon 可通过 amd64 仿真使用，但暂未作为官方
-验证平台；native ARM 和 Windows 验证延期。
+在运行环境中执行 `igv-snapshot smoke-test --output /output/smoke-test`，
+使用微型合成 BAM 走真实 IGV/Nextflow 出图流程。此项测试不阻塞正式运行，
+也不会生成“授权通过”凭证；不再要求固定 100-case pilot。
+`-stub-run` 只验证流程连接，不能证明 IGV 已经正确出图。
+详见[测试与发布](docs/testing-and-releases.md)。
 
 ### 开发者架构
 
@@ -833,7 +796,7 @@ lineage 只存在于 Nextflow trace/cache；campaign 和 review record 不复制
 
 `igv-snapshot reconcile --output RUN` rebuilds the product status from retained
 terminal evidence without rerendering. For chunked ssQTL campaigns, use
-`igv-snapshot campaign reconcile --campaign-dir CAMPAIGN --runs-dir RUNS --output COLLECTION`.
+`python -m ssqtl_igv.benchmark_cli campaign reconcile --campaign-dir CAMPAIGN --runs-dir RUNS --output COLLECTION`.
 The collection must be separate from the source workspaces.
 
 Recovery, allocation-aware scheduling, native locus verification, the atomic

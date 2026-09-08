@@ -78,7 +78,7 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert 'exec "${nextflow_launcher}" "$@"' in nextflow_wrapper
     assert 'ENTRYPOINT ["runtime-entrypoint"]' in dockerfile
     assert 'CMD ["--help"]' in dockerfile
-    assert 'doctor|run|rerun-failed|review|publish|campaign)' in entrypoint
+    assert 'doctor|run|rerun-failed|review|publish|smoke-test)' in entrypoint
     assert 'init|import-v2|reconcile|export-snapshots)' in entrypoint
     assert '--help|-h|--version)' in entrypoint
     assert 'exec "${cli}" "$@"' in entrypoint
@@ -89,8 +89,8 @@ def test_runtime_separates_controller_java_from_bundled_igv_java() -> None:
     assert '[[ "$(id -u)" != 0 ]]' in entrypoint
     assert '[[ "$1" == "run" ||' in entrypoint
     assert '"$1" == "rerun-failed"' in entrypoint
-    assert '"${2:-}" == "prepare-master"' in entrypoint
-    assert '"${2:-}" == "run-batch"' in entrypoint
+    assert '"$1" == "smoke-test"' in entrypoint
+    assert '"$1" == "campaign"' not in entrypoint
     assert "/usr/local/bin/runtime-self-test >/dev/null" in entrypoint
     assert '[[ "$2" == "-ue" && "$3" == /*/.command.sh ]]' in entrypoint
     assert '[[ "$2" == /*/.command.run && "$3" == "nxf_trace" ]]' in entrypoint
@@ -165,8 +165,8 @@ def test_runtime_entrypoint_self_tests_only_execution_capable_commands() -> None
         : entrypoint.rindex("/usr/local/bin/runtime-self-test >/dev/null")
     ]
     assert '"$1" == "rerun-failed"' in condition
-    assert '"${2:-}" == "prepare-master"' in condition
-    assert '"${2:-}" == "run-batch"' in condition
+    assert '"$1" == "smoke-test"' in condition
+    assert '"$1" == "campaign"' not in condition
     for control_only in ("prepare", "status", "next"):
         assert f'"${{2:-}}" == "{control_only}"' not in condition
 
@@ -466,7 +466,7 @@ def test_deferred_scc_controller_launcher_fails_closed() -> None:
 
 
 def test_candidate_workflow_builds_one_hardened_public_main_oci() -> None:
-    candidate = _text(".github/workflows/pilot-candidate.yml")
+    candidate = _text("benchmarks/legacy/pilot-candidate.yml")
 
     assert "workflow_dispatch:" in candidate
     assert "pull_request:" not in candidate
@@ -501,35 +501,21 @@ def test_candidate_workflow_builds_one_hardened_public_main_oci() -> None:
         assert removed_gate not in candidate.lower()
 
 
-def test_release_workflow_promotes_candidate_supply_chain_evidence() -> None:
+def test_release_workflow_tests_a_tagged_image_without_site_gates() -> None:
     release = _text(".github/workflows/release.yml")
-
-    assert 'tags:\n      - "v3.0.0"' in release
-    assert "IMAGE: ghcr.io/luckyfruit88/igv-pipeline" in release
-    assert "refs/remotes/origin/main" in release
-    assert "scripts/verify-v3-release-tag.py" in release
-    assert "--expected-commit" in release
-    assert "pilot-candidate.yml/runs" in release
-    assert "gh run download" in release
-    assert "sha256sum --check --strict SHA256SUMS" in release
-    assert "embedded-source.json" in release
-    assert "pilot-%s" in release
-    assert "docker/build-push-action@" not in release
-    assert "docker buildx imagetools create" in release
-    assert '--tag "${IMAGE}:3.0.0"' in release
-    assert '--tag "${IMAGE}:3.0"' in release
-    assert '--tag "${IMAGE}:latest"' in release
-    assert '"$immutable"' in release
-    assert "test \"$release_digest\" = \"$pilot_digest\"" in release
-    assert "OCI_DIGEST.txt" in release
-    assert "PILOT_REFERENCE.txt" in release
-    assert "PILOT_CANDIDATE_RUN_ID.txt" in release
-    assert "RELEASE_TAG_DIGESTS.txt" in release
-    assert "SHA256SUMS" in release
-    assert "trivy-report.json" in release
+    assert 'tags: ["v*"]' in release
+    assert 'scripts/release-version.py --tag "$GITHUB_REF_NAME"' in release
+    assert "python -m pytest -q" in release
+    assert release.count("docker/build-push-action@") == 1
+    assert "load: true" in release and "push: false" in release
+    assert "smoke-test --output /output/smoke" in release
+    assert release.index("Test the candidate with real IGV") < release.index("docker push")
+    assert "--network none" in release
+    assert "--cap-drop ALL" in release
+    assert "--security-opt no-new-privileges" in release
     assert 'exit-code: "0"' in release
-    for removed_gate in ("cosign", "public_key", "certification", "jre11_risk"):
-        assert removed_gate not in release.lower()
+    for gate in ("pilot-candidate", "SCC", "8,973", "100-case", "refs/remotes/origin/main"):
+        assert gate not in release
 
 
 def test_runtime_debug_is_separate_local_only_and_fail_closed() -> None:
@@ -632,26 +618,20 @@ def test_debug_capture_is_visibly_marked_and_rejected_by_production_gate(
     assert "PRODUCTION_ARTIFACT_GATE=BLOCKED" in blocked.stderr
 
 
-def test_release_tags_share_one_build_digest_and_maintainer_artifact_set() -> None:
-    candidate = _text(".github/workflows/pilot-candidate.yml")
+def test_release_pushes_the_tested_image_and_retains_evidence() -> None:
     release = _text(".github/workflows/release.yml")
-
-    assert candidate.count("docker/build-push-action@") == 1
-    assert release.count("docker/build-push-action@") == 0
-    assert "provenance: mode=max" in candidate
-    assert "sbom: true" in candidate
-    assert "provenance:" not in release
-    assert "sbom:" not in release
-    assert release.count("steps.pilot_evidence.outputs.digest") >= 3
-    assert release.index("Require public immutable pilot artifact") < release.index(
-        "Log in to GHCR"
-    )
-    assert "test \"$(jq -r '.digest' \"$tagged_manifest\")\" = \"$pilot_digest\"" in release
-    assert "for tag in 3.0.0 3.0 latest" in release
-    assert "name: igv-pipeline-3.0.0-release-evidence" in release
-    assert "gh release create" in release
-    assert "--verify-tag" in release
-    assert "signed" not in release.lower()
+    assert release.count("docker/build-push-action@") == 1
+    assert 'docker tag igv-pipeline:release "$target"' in release
+    assert 'docker push "$target"' in release
+    assert 'docker pull "${IMAGE}@${digest}"' in release
+    assert 'test "$(docker image inspect' in release
+    assert "Refusing to overwrite an existing version tag" in release
+    for artifact in ("SOURCE_COMMIT.txt", "SOURCE_TREE.txt", "RUNTIME_MANIFEST.json",
+                     "TESTED_IMAGE_ID.txt", "OCI_DIGEST.txt", "SHA256SUMS", "trivy-report.json"):
+        assert artifact in release
+    assert 'gh release create "$GITHUB_REF_NAME" --verify-tag' in release
+    assert "latest" not in release
+    assert "igv-pipeline-${{ steps.source.outputs.version }}-release-evidence" in release
 
 
 def test_debug_and_release_gate_scripts_parse() -> None:
