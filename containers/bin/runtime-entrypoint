@@ -66,7 +66,7 @@ case "$1" in
         fi
         exec "${cli}" "$@"
         ;;
-    init|import-v2)
+    init|import-v2|reconcile|export-snapshots)
         exec "${cli}" "$@"
         ;;
     --help|-h|--version)
