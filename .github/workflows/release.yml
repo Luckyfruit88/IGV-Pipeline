@@ -2,244 +2,151 @@ name: release-oci
 
 on:
   push:
-    tags:
-      - "v3.0.0"
+    tags: ["v*"]
 
 permissions:
-  actions: read
   contents: write
   packages: write
 
 concurrency:
-  group: release-oci-v3.0.0
+  group: release-oci-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  promote:
+  release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       IMAGE: ghcr.io/luckyfruit88/igv-pipeline
     steps:
       - name: Check out the tagged source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Require the release tag to equal current origin/main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+
+      - name: Validate the release version and record source
         id: source
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "v3.0.0"
-          test "$(git describe --tags --exact-match HEAD)" = "v3.0.0"
-          git fetch --no-tags origin \
-            '+refs/heads/main:refs/remotes/origin/main'
-          expected_commit="$(git rev-parse refs/remotes/origin/main)"
-          PYTHONPATH=src python3 scripts/verify-v3-release-tag.py \
-            --repository . \
-            --tag "$GITHUB_REF_NAME" \
-            --expected-commit "$expected_commit" \
-            > RELEASE_TAG_VERIFICATION.json
-          tagged_commit="$(git rev-parse \
-            "refs/tags/${GITHUB_REF_NAME}^{commit}")"
-          test "$tagged_commit" = "$expected_commit"
-          printf 'commit=%s\n' "$tagged_commit" >> "$GITHUB_OUTPUT"
-          printf 'tree=%s\n' \
-            "$(git rev-parse "${tagged_commit}^{tree}")" \
-            >> "$GITHUB_OUTPUT"
+          python scripts/release-version.py --tag "$GITHUB_REF_NAME" > RELEASE_VERSION.json
+          echo "version=$(jq -r .version RELEASE_VERSION.json)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          git rev-parse HEAD > SOURCE_COMMIT.txt
+          git rev-parse 'HEAD^{tree}' > SOURCE_TREE.txt
 
-      - name: Recover the immutable pilot digest evidence
-        id: pilot_evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Run the contract regression suite
+        run: |
+          python -m pip install -r requirements.lock -r requirements-build.lock pytest==8.4.2
+          python -m pip install --no-deps --no-build-isolation --editable .
+          python -m pytest -q
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          driver: docker
+
+      - name: Build one local candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: containers/runtime.Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: igv-pipeline:release
+          build-args: |
+            SOURCE_COMMIT=${{ steps.source.outputs.commit }}
+            SOURCE_TREE=${{ steps.source.outputs.tree }}
+
+      - name: Test the candidate with real IGV and Nextflow
         shell: bash
         run: |
           set -euo pipefail
-          commit='${{ steps.source.outputs.commit }}'
-          tree='${{ steps.source.outputs.tree }}'
-          runs="$(
-            gh api \
-              --paginate \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/pilot-candidate.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=100" \
-              --jq ".workflow_runs[] | select(.head_sha == \"${commit}\" and .conclusion == \"success\") | .id"
-          )"
-          mapfile -t run_ids <<<"$runs"
-          test "${#run_ids[@]}" -eq 1
-          [[ "${run_ids[0]}" =~ ^[1-9][0-9]*$ ]]
-          evidence="${RUNNER_TEMP}/pilot-evidence"
-          mkdir -p "$evidence"
-          gh run download "${run_ids[0]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "igv-pipeline-pilot-${commit}-evidence" \
-            --dir "$evidence"
-          expected_files="$(
-            find "$evidence" -maxdepth 1 -type f -printf '%f\n' |
-              LC_ALL=C sort
-          )"
-          test "$expected_files" = "$(
-            printf '%s\n' \
-              OCI_DIGEST.txt \
-              OCI_REFERENCE.txt \
-              SHA256SUMS \
-              SOURCE_COMMIT.txt \
-              SOURCE_TREE.txt \
-              embedded-source.json |
-              LC_ALL=C sort
-          )"
-          (
-            cd "$evidence"
-            sha256sum --check --strict SHA256SUMS
-          )
-          test "$(cat "$evidence/SOURCE_COMMIT.txt")" = "$commit"
-          test "$(cat "$evidence/SOURCE_TREE.txt")" = "$tree"
-          jq -e \
-            --arg commit "$commit" \
-            --arg tree "$tree" \
-            '. == {"commit": $commit, "tree": $tree}' \
-            "$evidence/embedded-source.json" >/dev/null
-          pilot_digest="$(cat "$evidence/OCI_DIGEST.txt")"
-          [[ "$pilot_digest" =~ ^sha256:[a-f0-9]{64}$ ]]
-          test "$(cat "$evidence/OCI_REFERENCE.txt")" = \
-            "${IMAGE}@${pilot_digest}"
-          printf 'tag=pilot-%s\n' "$commit" >> "$GITHUB_OUTPUT"
-          printf 'digest=%s\n' "$pilot_digest" >> "$GITHUB_OUTPUT"
-          printf 'candidate_run_id=%s\n' "${run_ids[0]}" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/igv-smoke"
+          docker run --rm --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,src=$RUNNER_TEMP/igv-smoke,dst=/output" \
+            igv-pipeline:release smoke-test --output /output/smoke
+          docker run --rm --user "$(id -u):$(id -g)" --network none \
+            --entrypoint /opt/igv-helper/bin/python igv-pipeline:release \
+            -c 'import importlib.metadata as m,json,sys; p=json.load(open("/opt/igv-pipeline/runtime-manifest.json")); assert p["source"] == {"commit":sys.argv[1],"tree":sys.argv[2]}; assert p["pipeline"]["version"] == m.version("igv-snapshot-workflow") == sys.argv[3]; print(json.dumps(p,sort_keys=True))' \
+            '${{ steps.source.outputs.commit }}' '${{ steps.source.outputs.tree }}' '${{ steps.source.outputs.version }}' \
+            > RUNTIME_MANIFEST.json
+          docker image inspect igv-pipeline:release --format '{{.Id}}' > TESTED_IMAGE_ID.txt
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Scan the tested candidate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: igv-pipeline:release
+          format: json
+          output: trivy-report.json
+          exit-code: "0"
 
-      - name: Require public immutable pilot artifact and unchanged tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          pilot_digest='${{ steps.pilot_evidence.outputs.digest }}'
-          immutable="${IMAGE}@${pilot_digest}"
-          pilot_ref="${IMAGE}:${{ steps.pilot_evidence.outputs.tag }}"
-          immutable_manifest="${RUNNER_TEMP}/pilot-immutable-manifest.json"
-          tagged_manifest="${RUNNER_TEMP}/pilot-tagged-manifest.json"
-          docker buildx imagetools inspect "$immutable" \
-            --format '{{json .Manifest}}' > "$immutable_manifest"
-          docker buildx imagetools inspect "$pilot_ref" \
-            --format '{{json .Manifest}}' > "$tagged_manifest"
-          test "$(jq -r '.digest' "$immutable_manifest")" = "$pilot_digest"
-          test "$(jq -r '.digest' "$tagged_manifest")" = "$pilot_digest"
-          jq -e '
-            [
-              .manifests[]
-              | select(
-                  .platform.os != "unknown"
-                  or .platform.architecture != "unknown"
-                )
-              | [.platform.os, .platform.architecture]
-            ] == [["linux", "amd64"]]
-          ' "$immutable_manifest" >/dev/null
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - name: Log in to GHCR after successful tests
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Promote the pilot manifest without rebuilding
+      - name: Publish the tested image without rebuilding
         shell: bash
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
         run: |
           set -euo pipefail
-          immutable="${IMAGE}@${{ steps.pilot_evidence.outputs.digest }}"
-          docker buildx imagetools create \
-            --tag "${IMAGE}:3.0.0" \
-            --tag "${IMAGE}:3.0" \
-            --tag "${IMAGE}:latest" \
-            "$immutable"
+          target="${IMAGE}:${VERSION}"
+          if docker buildx imagetools inspect "$target" > "$RUNNER_TEMP/tag-check.txt" 2>&1; then
+            echo "Refusing to overwrite an existing version tag: $target" >&2
+            exit 1
+          elif ! grep -Eiq 'not found|manifest unknown' "$RUNNER_TEMP/tag-check.txt"; then
+            cat "$RUNNER_TEMP/tag-check.txt" >&2
+            exit 1
+          fi
+          docker tag igv-pipeline:release "$target"
+          docker push "$target"
+          docker buildx imagetools inspect "$target" --format '{{json .Manifest}}' > RELEASE_MANIFEST.json
+          digest="$(jq -r .digest RELEASE_MANIFEST.json)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker pull "${IMAGE}@${digest}"
+          test "$(docker image inspect "${IMAGE}@${digest}" --format '{{.Id}}')" = "$(cat TESTED_IMAGE_ID.txt)"
+          printf '%s\n' "$digest" > OCI_DIGEST.txt
+          printf '%s@%s\n' "$IMAGE" "$digest" > OCI_REFERENCE.txt
+          sha256sum RELEASE_VERSION.json SOURCE_COMMIT.txt SOURCE_TREE.txt \
+            RUNTIME_MANIFEST.json TESTED_IMAGE_ID.txt RELEASE_MANIFEST.json \
+            OCI_DIGEST.txt OCI_REFERENCE.txt trivy-report.json > SHA256SUMS
 
-      - name: Verify every release tag resolves to the pilot digest
-        shell: bash
-        run: |
-          set -euo pipefail
-          pilot_digest='${{ steps.pilot_evidence.outputs.digest }}'
-          : > RELEASE_TAG_DIGESTS.txt
-          for tag in 3.0.0 3.0 latest; do
-            manifest="${RUNNER_TEMP}/release-${tag}.json"
-            docker buildx imagetools inspect "${IMAGE}:${tag}" \
-              --format '{{json .Manifest}}' > "$manifest"
-            release_digest="$(jq -r '.digest' "$manifest")"
-            test "$release_digest" = "$pilot_digest"
-            printf '%s:%s@%s\n' "$IMAGE" "$tag" "$release_digest" \
-              >> RELEASE_TAG_DIGESTS.txt
-          done
-
-      - name: Record immutable release evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s\n' '${{ steps.source.outputs.commit }}' \
-            > SOURCE_COMMIT.txt
-          printf '%s\n' '${{ steps.source.outputs.tree }}' \
-            > SOURCE_TREE.txt
-          printf '%s\n' '${{ steps.pilot_evidence.outputs.digest }}' \
-            > OCI_DIGEST.txt
-          printf '%s:%s@%s\n' \
-            "$IMAGE" \
-            '${{ steps.pilot_evidence.outputs.tag }}' \
-            '${{ steps.pilot_evidence.outputs.digest }}' \
-            > PILOT_REFERENCE.txt
-          printf '%s\n' '${{ steps.pilot_evidence.outputs.candidate_run_id }}' \
-            > PILOT_CANDIDATE_RUN_ID.txt
-
-      - name: Generate a non-blocking vulnerability report
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - name: Retain release and real-render evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          image-ref: ${{ env.IMAGE }}@${{ steps.pilot_evidence.outputs.digest }}
-          format: json
-          output: trivy-report.json
-          exit-code: "0"
-
-      - name: Finalize release checksums
-        shell: bash
-        run: |
-          sha256sum \
-            RELEASE_TAG_VERIFICATION.json \
-            SOURCE_COMMIT.txt \
-            SOURCE_TREE.txt \
-            OCI_DIGEST.txt \
-            PILOT_REFERENCE.txt \
-            PILOT_CANDIDATE_RUN_ID.txt \
-            RELEASE_TAG_DIGESTS.txt \
-            trivy-report.json \
-            > SHA256SUMS
-
-      - name: Upload release evidence for maintainers
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: igv-pipeline-3.0.0-release-evidence
+          name: igv-pipeline-${{ steps.source.outputs.version }}-release-evidence
           path: |
-            RELEASE_TAG_VERIFICATION.json
+            RELEASE_VERSION.json
             SOURCE_COMMIT.txt
             SOURCE_TREE.txt
+            RUNTIME_MANIFEST.json
+            TESTED_IMAGE_ID.txt
+            RELEASE_MANIFEST.json
             OCI_DIGEST.txt
-            PILOT_REFERENCE.txt
-            PILOT_CANDIDATE_RUN_ID.txt
-            RELEASE_TAG_DIGESTS.txt
-            SHA256SUMS
+            OCI_REFERENCE.txt
             trivy-report.json
+            SHA256SUMS
+            ${{ runner.temp }}/igv-smoke/smoke/results/snapshots
+            ${{ runner.temp }}/igv-smoke/smoke/results/snapshots.tsv
           if-no-files-found: error
 
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --generate-notes \
-            --title "IGV Pipeline 3.0.0" \
-            RELEASE_TAG_VERIFICATION.json \
-            SOURCE_COMMIT.txt \
-            SOURCE_TREE.txt \
-            OCI_DIGEST.txt \
-            PILOT_REFERENCE.txt \
-            PILOT_CANDIDATE_RUN_ID.txt \
-            RELEASE_TAG_DIGESTS.txt \
-            SHA256SUMS \
-            trivy-report.json
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+            --title "IGV Pipeline ${{ steps.source.outputs.version }}" \
+            RELEASE_VERSION.json SOURCE_COMMIT.txt SOURCE_TREE.txt RUNTIME_MANIFEST.json \
+            TESTED_IMAGE_ID.txt RELEASE_MANIFEST.json OCI_DIGEST.txt OCI_REFERENCE.txt \
+            trivy-report.json SHA256SUMS
